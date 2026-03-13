@@ -13,6 +13,9 @@ dist/
 *.rpm
 *.msi
 
+# Chat conversation logs
+chats/
+
 # Logs and caches
 *.log
 npm-debug.log*

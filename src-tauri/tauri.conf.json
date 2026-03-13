@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.jarvis.chatbot",
   "build": {
-    "beforeDevCommand": "npx -y serve frontend -p 1430",
+    "beforeDevCommand": "npx -y live-server frontend --port=1430 --no-browser --ignore=node_modules",
     "devUrl": "http://localhost:1430",
     "beforeBuildCommand": "",
     "frontendDist": "../frontend"
@@ -14,12 +14,13 @@
     "windows": [
       {
         "title": "JARVIS",
-        "fullscreen": true,
+        "fullscreen": false,
         "width": 1280,
         "height": 720,
         "resizable": true,
         "minWidth": 400,
-        "minHeight": 300
+        "minHeight": 300,
+        "decorations": false
       }
     ],
     "security": {

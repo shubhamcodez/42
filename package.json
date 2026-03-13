@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "tauri": "tauri",
-    "dev": "tauri dev",
-    "build": "tauri build"
+    "tauri": "node node_modules/@tauri-apps/cli/tauri.js",
+    "dev": "node node_modules/@tauri-apps/cli/tauri.js dev",
+    "build": "node node_modules/@tauri-apps/cli/tauri.js build"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"
