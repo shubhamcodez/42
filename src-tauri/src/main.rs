@@ -107,9 +107,10 @@ async fn run_desktop_agent(
     api_key: &str,
     goal: &str,
 ) -> Result<String, String> {
-    const MAX_STEPS: u32 = 25;
+    const MAX_STEPS: u32 = 10;
     let mut trace = Vec::new();
     let mut last_result: Option<String> = None;
+    let mut achieved = false;
 
     for step in 1..=MAX_STEPS {
         // 1. Screenshot
@@ -159,6 +160,7 @@ async fn run_desktop_agent(
 
         if action.action.eq_ignore_ascii_case("done") {
             trace.push("Goal achieved.".to_string());
+            achieved = true;
             if let Some(w) = window {
                 let _ = w.emit(
                     "desktop-agent-step",
@@ -219,6 +221,13 @@ async fn run_desktop_agent(
 
         // 4. ~1 second interval before next screenshot
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    }
+
+    if !achieved {
+        trace.push(format!(
+            "Stopped after {} steps (goal not yet achieved).",
+            MAX_STEPS
+        ));
     }
 
     Ok(format!(

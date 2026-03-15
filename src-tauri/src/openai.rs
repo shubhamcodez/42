@@ -195,7 +195,7 @@ async fn responses_with_files(
     }
 
     let body = ResponsesRequest {
-        model: "gpt-4o".to_string(),
+        model: "gpt-5.2".to_string(),
         input: vec![ResponsesInputItem {
             role: "user".to_string(),
             content,
@@ -232,7 +232,7 @@ async fn chat_completion_only(
     message: String,
 ) -> Result<String, String> {
     let body = ChatRequest {
-        model: "gpt-4o-mini".to_string(),
+        model: "gpt-5.2".to_string(),
         messages: vec![ChatMessageRequest {
             role: "user".to_string(),
             content: JsonValue::String(message),
@@ -310,7 +310,7 @@ pub async fn chat_with_system(
 ) -> Result<String, String> {
     let client = Client::new();
     let body = ChatRequest {
-        model: "gpt-4o-mini".to_string(),
+        model: "gpt-5.2".to_string(),
         messages: vec![
             ChatMessageRequest {
                 role: "system".to_string(),
@@ -405,12 +405,12 @@ pub async fn vision_desktop_action(
 
     let client = Client::new();
     let body = serde_json::json!({
-        "model": "gpt-4o-mini",
+        "model": "gpt-5.1",
         "messages": [
             { "role": "system", "content": DESKTOP_VISION_SYSTEM },
             { "role": "user", "content": user_content }
         ],
-        "max_tokens": 500
+        "max_completion_tokens": 500
     });
 
     let res = client
