@@ -264,6 +264,44 @@ async fn chat_completion_only(
     Ok(reply)
 }
 
+/// Classification result: is the user asking for a computer task (agent) or normal chat?
+#[derive(Debug, serde::Deserialize)]
+pub struct TaskClassification {
+    pub is_task: bool,
+    pub goal: Option<String>,
+}
+
+const TASK_CLASSIFY_SYSTEM: &str = r#"You are a classifier. The user is talking to an assistant that can either (1) chat normally (answer questions, summarize, discuss) or (2) perform actions on the computer (open URLs, navigate, click, fill forms, etc.).
+
+If the user is clearly asking the assistant to DO something on the computer (e.g. "open example.com", "go to google and search for X", "navigate to that page"), reply with a JSON object only, no other text: {"is_task": true, "goal": "one clear sentence describing the task"}.
+
+Otherwise (general question, chat, "what is X", "summarize this", "hello", or unclear), reply with: {"is_task": false, "goal": null}.
+
+Output ONLY the JSON object, no markdown or explanation."#;
+
+/// Classify user message as task (run agent) or normal chat. Returns (is_task, goal if task).
+pub async fn classify_task(api_key: &str, user_message: &str) -> Result<TaskClassification, String> {
+    let user_message = user_message.trim();
+    if user_message.is_empty() {
+        return Ok(TaskClassification {
+            is_task: false,
+            goal: None,
+        });
+    }
+    let raw = chat_with_system(api_key, TASK_CLASSIFY_SYSTEM, user_message).await?;
+    let raw = raw.trim();
+    // Extract JSON: model might wrap in ```json ... ``` or output raw
+    let json_str = raw
+        .strip_prefix("```json")
+        .or_else(|| raw.strip_prefix("```"))
+        .and_then(|s| s.strip_suffix("```"))
+        .map(|s| s.trim())
+        .unwrap_or(raw);
+    let classification: TaskClassification =
+        serde_json::from_str(json_str).map_err(|e| format!("Parse classification: {} (raw: {})", e, raw))?;
+    Ok(classification)
+}
+
 /// Chat with a system prompt (e.g. for planning). Returns assistant reply.
 pub async fn chat_with_system(
     api_key: &str,
@@ -302,4 +340,108 @@ pub async fn chat_with_system(
         .next()
         .map(|c| c.message.content)
         .ok_or_else(|| "No response.".to_string())
+}
+
+// --- Desktop agent: vision (screenshot + goal -> next action) ---
+
+/// Parsed action from the vision model for desktop control.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DesktopAction {
+    /// "click" | "type" | "scroll" | "done"
+    pub action: String,
+    /// Screen x for click (0 = left).
+    pub x: Option<i32>,
+    /// Screen y for click (0 = top). On Windows taskbar is usually at bottom.
+    pub y: Option<i32>,
+    /// Text to type (for action "type").
+    pub text: Option<String>,
+    /// Scroll amount (for action "scroll"), positive = down.
+    #[serde(default)]
+    pub scroll_amount: Option<i32>,
+    /// Human-readable description of what the model is doing.
+    pub description: Option<String>,
+    /// Brief reasoning: what you see on screen and why you chose this action (shown to user).
+    pub thought: Option<String>,
+}
+
+const DESKTOP_VISION_SYSTEM: &str = r#"You control the user's desktop by looking at a screenshot and deciding the next mouse/keyboard action.
+
+RULES:
+- Goal is given below. Perform ONE step at a time.
+- On Windows: taskbar is usually at the BOTTOM of the screen. Icons (Chrome, etc.) are on the taskbar. The search bar (Type here to search) is on the taskbar, often left or center.
+- If the app icon (e.g. Chrome) is visible on the taskbar: reply with action "click" and the approximate (x,y) of that icon (center of the icon).
+- If the app is NOT on the taskbar: use action "click" to click the taskbar search box first (give its approximate x,y), then on the next step you'll see the search open and use action "type" with the app name (e.g. "Chrome"), then click the search result.
+- Coordinates: (0,0) is top-left. x increases right, y increases down. Give pixel coordinates.
+- Reply with ONLY a JSON object, no markdown or other text. Include "thought": a 1–2 sentence explanation of what you see on screen and why you are taking this action (e.g. "I see the taskbar at the bottom. The Chrome icon is visible; I'll click it."). Format:
+{"action": "click"|"type"|"scroll"|"done", "x": number or null, "y": number or null, "text": string or null, "scroll_amount": number or null, "description": "what you're doing", "thought": "what you see and why you're doing this"}
+- Use "done" when the goal is achieved (e.g. Chrome window is open). For "done", set thought to a brief summary (e.g. "Chrome window is now open.").
+- Use "type" to type text (e.g. in search box). Use "click" to click at (x,y). Use "scroll" with scroll_amount (positive = scroll down)."#;
+
+/// Call vision model with screenshot (base64 PNG) and goal; returns one desktop action.
+pub async fn vision_desktop_action(
+    api_key: &str,
+    image_base64: &str,
+    goal: &str,
+    step: u32,
+    last_result: Option<&str>,
+) -> Result<DesktopAction, String> {
+    let user_content = serde_json::json!([
+        {
+            "type": "text",
+            "text": format!(
+                "Goal: {}. Step {}. {} Reply with ONLY the JSON object.",
+                goal,
+                step,
+                last_result
+                    .map(|r| format!("Last action result: {}", r))
+                    .unwrap_or_else(|| "First step.".to_string())
+            )
+        },
+        {
+            "type": "image_url",
+            "image_url": { "url": format!("data:image/png;base64,{}", image_base64) }
+        }
+    ]);
+
+    let client = Client::new();
+    let body = serde_json::json!({
+        "model": "gpt-4o-mini",
+        "messages": [
+            { "role": "system", "content": DESKTOP_VISION_SYSTEM },
+            { "role": "user", "content": user_content }
+        ],
+        "max_tokens": 500
+    });
+
+    let res = client
+        .post("https://api.openai.com/v1/chat/completions")
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("Vision API error {}: {}", status, text));
+    }
+
+    let chat: ChatResponse = res.json().await.map_err(|e| e.to_string())?;
+    let raw = chat
+        .choices
+        .into_iter()
+        .next()
+        .map(|c| c.message.content)
+        .unwrap_or_default();
+    let raw = raw.trim();
+    let json_str = raw
+        .strip_prefix("```json")
+        .or_else(|| raw.strip_prefix("```"))
+        .and_then(|s| s.strip_suffix("```"))
+        .map(|s| s.trim())
+        .unwrap_or(raw);
+    let action: DesktopAction =
+        serde_json::from_str(json_str).map_err(|e| format!("Parse desktop action: {} (raw: {})", e, raw))?;
+    Ok(action)
 }

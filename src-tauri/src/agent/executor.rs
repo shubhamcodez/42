@@ -114,7 +114,7 @@ fn execute_action_and_apply_result(
 fn apply_verification_and_recovery(
     session_id: &str,
     sess: &mut session::AgentSession,
-    action: &AgentAction,
+    _action: &AgentAction,
     success: bool,
     run_result: Result<(), String>,
     snapshot_opt: Option<Snapshot>,

@@ -28,7 +28,7 @@ pub struct AgentSessionSummary {
 }
 
 #[tauri::command]
-pub async fn agent_submit_goal(goal: String) -> Result<AgentSessionSummary, String> {
+pub async fn agent_submit_goal(goal: String, chat_id: Option<String>) -> Result<AgentSessionSummary, String> {
     let goal = goal.trim();
     if goal.is_empty() {
         return Err("Goal cannot be empty.".to_string());
@@ -38,7 +38,7 @@ pub async fn agent_submit_goal(goal: String) -> Result<AgentSessionSummary, Stri
         .map_err(|e| e.to_string())?
         .as_secs()
         .to_string();
-    let session = session::AgentSession::new(id.clone(), goal.to_string());
+    let session = session::AgentSession::new(id.clone(), goal.to_string(), chat_id.clone());
     session::save_session(&session)?;
     trace::append(
         &id,
@@ -47,6 +47,9 @@ pub async fn agent_submit_goal(goal: String) -> Result<AgentSessionSummary, Stri
         },
     )?;
     let _ = planner::plan_subgoals(&id, goal).await?;
+    if let Some(ref cid) = chat_id {
+        let _ = crate::chat_log::add_agent_session_to_chat(cid, &id);
+    }
     let session = session::load_session(&id)?
         .ok_or_else(|| "Session not found after plan".to_string())?;
     let trace_lines = trace::read_trace(&id)?;
@@ -86,6 +89,40 @@ pub fn agent_list_sessions() -> Result<Vec<String>, String> {
 #[tauri::command]
 pub fn agent_run_step(session_id: String) -> Result<AgentSessionSummary, String> {
     executor::run_one_step(&session_id)
+}
+
+/// Run up to max_steps (capped at 10). Stops on completed/failed/stopped/blocked. Returns final summary and steps_run count.
+#[tauri::command]
+pub fn agent_run_steps(session_id: String, max_steps: u32) -> Result<AgentRunStepsResult, String> {
+    const CAP: u32 = 10;
+    let limit = max_steps.min(CAP);
+    let mut steps_run = 0u32;
+    let mut summary = agent_get_session(session_id.clone())?;
+    while steps_run < limit {
+        if matches!(
+            summary.status.as_str(),
+            "completed" | "failed" | "stopped" | "blocked"
+        ) {
+            break;
+        }
+        summary = executor::run_one_step(&session_id)?;
+        steps_run += 1;
+    }
+    Ok(AgentRunStepsResult {
+        summary,
+        steps_run,
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct AgentRunStepsResult {
+    pub summary: AgentSessionSummary,
+    pub steps_run: u32,
+}
+
+#[tauri::command]
+pub fn agent_sessions_for_chat(chat_id: String) -> Result<Vec<String>, String> {
+    session::list_session_ids_for_chat(&chat_id)
 }
 
 #[tauri::command]

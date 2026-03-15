@@ -4,6 +4,7 @@ use crate::agent::session;
 
 /// Recovery decision after a failed step.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum RecoveryAction {
     Retry,
     Abort,

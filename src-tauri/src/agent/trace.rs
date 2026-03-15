@@ -11,6 +11,7 @@ use super::session;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
+#[allow(dead_code)]
 pub enum TraceEvent {
     SessionCreated { goal: String },
     PlanReady { subgoals: Vec<String> },

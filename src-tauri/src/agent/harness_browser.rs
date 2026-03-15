@@ -6,6 +6,7 @@ use headless_chrome::browser::{Browser, Tab};
 use headless_chrome::protocol::cdp::Page::CaptureScreenshotFormatOption;
 
 /// Result of getting a page snapshot (DOM excerpt + screenshot base64).
+#[allow(dead_code)]
 pub struct Snapshot {
     pub url: String,
     pub title: String,
@@ -89,6 +90,7 @@ impl BrowserHarness {
     }
 
     /// Click element by CSS selector.
+    #[allow(dead_code)]
     pub fn click(&self, selector: &str) -> Result<(), String> {
         let tab = self.tab()?;
         let el = tab.wait_for_element(selector).map_err(|e| e.to_string())?;
@@ -97,6 +99,7 @@ impl BrowserHarness {
     }
 
     /// Type text into element (by selector). Clears existing value.
+    #[allow(dead_code)]
     pub fn type_into(&self, selector: &str, text: &str) -> Result<(), String> {
         let tab = self.tab()?;
         let el = tab.wait_for_element(selector).map_err(|e| e.to_string())?;
@@ -105,6 +108,7 @@ impl BrowserHarness {
     }
 
     /// Close browser.
+    #[allow(dead_code)]
     pub fn close(&mut self) {
         self.tab = None;
         self.browser = None;

@@ -39,12 +39,15 @@ pub struct AgentSession {
     /// Action waiting for human approval; when set, status is Blocked.
     #[serde(default)]
     pub pending_action: Option<AgentAction>,
+    /// Chat this session belongs to, if created from a chat.
+    #[serde(default)]
+    pub chat_id: Option<String>,
     pub created_at_secs: u64,
     pub updated_at_secs: u64,
 }
 
 impl AgentSession {
-    pub fn new(id: String, goal: String) -> Self {
+    pub fn new(id: String, goal: String, chat_id: Option<String>) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -60,15 +63,18 @@ impl AgentSession {
             max_retries: 3,
             blocked_reason: None,
             pending_action: None,
+            chat_id,
             created_at_secs: now,
             updated_at_secs: now,
         }
     }
 
+    #[allow(dead_code)]
     pub fn current_subgoal(&self) -> Option<&str> {
         self.subgoals.get(self.current_subgoal_index).map(|s| s.as_str())
     }
 
+    #[allow(dead_code)]
     pub fn is_done(&self) -> bool {
         matches!(
             self.status,
@@ -122,16 +128,37 @@ pub fn load_session(id: &str) -> Result<Option<AgentSession>, String> {
 }
 
 pub fn list_session_ids() -> Result<Vec<String>, String> {
+    list_session_ids_filter(None)
+}
+
+/// List session ids, optionally only those for a given chat_id.
+pub fn list_session_ids_for_chat(chat_id: &str) -> Result<Vec<String>, String> {
+    list_session_ids_filter(Some(chat_id))
+}
+
+fn list_session_ids_filter(chat_id: Option<&str>) -> Result<Vec<String>, String> {
     let dir = sessions_dir()?;
     let mut ids = Vec::new();
     for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            if let Some(stem) = path.file_stem() {
-                ids.push(stem.to_string_lossy().replace('_', "-"));
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let id = match path.file_stem() {
+            Some(stem) => stem.to_string_lossy().replace('_', "-"),
+            None => continue,
+        };
+        if let Some(cid) = chat_id {
+            let sess = match load_session(&id)? {
+                Some(s) => s,
+                None => continue,
+            };
+            if sess.chat_id.as_deref() != Some(cid) {
+                continue;
             }
         }
+        ids.push(id);
     }
     ids.sort_by(|a, b| b.cmp(a));
     Ok(ids)

@@ -10,4 +10,5 @@
 //! - **Recovery cap**: max_retries per session limits automatic retries before abort.
 
 /// Actions with this risk level or higher require human approval before execution.
+#[allow(dead_code)]
 pub const APPROVAL_REQUIRED_RISK_LEVEL: &str = "medium";

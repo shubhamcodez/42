@@ -393,6 +393,43 @@ html, body {
   margin: 0.25rem 0 0;
 }
 
+.chat-agent-section {
+  padding: 0 2rem 1rem;
+  border-top: 1px solid #1a1a1a;
+  background: #0a0a0a;
+}
+
+.chat-agent-section .settings-label {
+  margin-bottom: 0.5rem;
+}
+
+.chat-agent-goal {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  margin-bottom: 0.75rem;
+}
+
+.chat-agent-goal .agent-goal-input {
+  flex: 1;
+  min-height: 2rem;
+}
+
+.chat-agent-sessions {
+  max-height: 6rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 0.5rem;
+}
+
+.chat-agent-section .agent-detail {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #1a1a1a;
+}
+
 .chat-container {
   display: flex;
   flex-direction: column;
@@ -432,6 +469,27 @@ html, body {
 
 .msg-text {
   white-space: pre-wrap;
+}
+
+.agent-thought-process {
+  margin-top: 0.5rem;
+}
+
+.agent-step {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: #0a0a0a;
+  border-left: 3px solid #58a6ff;
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.agent-step strong {
+  color: #58a6ff;
+}
+
+.agent-step em {
+  color: #8b949e;
 }
 
 .chat-input-area {
