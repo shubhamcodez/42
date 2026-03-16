@@ -39,7 +39,7 @@ from observability.eval_runner import run_evals_for_all_models, pass_at_k
 from observability.evals import load_eval_cases, load_eval_runs
 from observability.optimize import run_optimization_step, get_latest_optimization_stats
 from observability.human_eval import run_human_eval_benchmark
-from tools import get_weather
+from tools import get_weather, try_weather_tool
 
 app = FastAPI(title="JARVIS API")
 app.add_middleware(
@@ -231,8 +231,10 @@ async def send_message_stream(body: SendMessageRequest):
     has_attachments = len(attachment_paths) > 0
     client = get_llm_client(provider)
 
-    async def _stream_chat_reply(api_key_, msg_, paths_, history_=None, system_content_=None):
-        """Run sync chat_stream in executor and yield SSE as chunks arrive via queue."""
+    async def _stream_chat_reply(
+        api_key_, msg_, paths_, history_=None, system_content_=None, tool_used_=None, chat_id_=None
+    ):
+        """Run sync chat_stream in executor and yield SSE as chunks arrive. Optional tool_used for final event."""
         chunk_queue = queue.Queue()
         loop = asyncio.get_event_loop()
 
@@ -253,10 +255,18 @@ async def send_message_stream(body: SendMessageRequest):
                 break
             full.append(chunk)
             yield f"data: {json.dumps({'delta': chunk})}\n\n"
-        yield f"data: {json.dumps({'done': True, 'reply': ''.join(full)})}\n\n"
+        reply = "".join(full)
+        payload = {"done": True, "reply": reply}
+        if tool_used_:
+            payload["tool_used"] = tool_used_
+            if chat_id_:
+                set_current_chat(chat_id_)
+                append_chat_log("tool", json.dumps(tool_used_))
+        yield f"data: {json.dumps(payload)}\n\n"
 
     def _chat_history_and_system():
-        """Load conversation history and optional memory context for chat."""
+        """Every conversation: (1) load full history, (2) run tool calls (e.g. weather), (3) build system. Returns (hist, sys_content, tool_used)."""
+        # 1) Conversation history goes into every turn (same for all messages in this chat)
         hist = read_chat_log(chat_id)[-40:] if chat_id else None
         sys_content = None
         try:
@@ -273,20 +283,30 @@ async def send_message_stream(body: SendMessageRequest):
                 sys_content = (sys_content or "").strip() or None
         except Exception:
             pass
-        return hist, sys_content
+        # 2) Tool calls: run applicable tools (weather app, etc.) using conversation context; then inject results
+        from tools.runner import run_tools_for_turn
+        tool_system, tool_used = run_tools_for_turn(message or "", recent_turns=hist or [])
+        if tool_system:
+            sys_content = (tool_system + "\n\n" + (sys_content or "")) if sys_content else tool_system
+        sys_final = (sys_content.strip() or None) if sys_content else None
+        return hist, sys_final, tool_used
 
     async def event_stream():
         # Attachments-only: go straight to chat stream
         if not message and has_attachments:
             msg = "Please summarize or answer based on the attached documents."
-            hist, sys = await asyncio.to_thread(_chat_history_and_system)
-            async for line in _stream_chat_reply(api_key, msg, attachment_paths, hist, sys):
+            hist, sys, tool_used = await asyncio.to_thread(_chat_history_and_system)
+            async for line in _stream_chat_reply(
+                api_key, msg, attachment_paths, hist, sys, tool_used, chat_id
+            ):
                 yield line
             return
 
         if not message:
-            hist, sys = await asyncio.to_thread(_chat_history_and_system)
-            async for line in _stream_chat_reply(api_key, "Hello.", None, hist, sys):
+            hist, sys, tool_used = await asyncio.to_thread(_chat_history_and_system)
+            async for line in _stream_chat_reply(
+                api_key, "Hello.", None, hist, sys, tool_used, chat_id
+            ):
                 yield line
             return
 
@@ -295,9 +315,9 @@ async def send_message_stream(body: SendMessageRequest):
         is_task = decision.get("run_agent") and bool(goal)
 
         if not is_task:
-            hist, sys = await asyncio.to_thread(_chat_history_and_system)
+            hist, sys, tool_used = await asyncio.to_thread(_chat_history_and_system)
             async for line in _stream_chat_reply(
-                api_key, message, attachment_paths or None, hist, sys
+                api_key, message, attachment_paths or None, hist, sys, tool_used, chat_id
             ):
                 yield line
             return

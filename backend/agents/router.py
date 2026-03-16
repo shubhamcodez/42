@@ -2,38 +2,12 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from typing import Literal, Optional
 
 from langgraph.graph import END, StateGraph
 
 from .state import RouterState
-
-
-def _try_weather_tool(message: str) -> Optional[tuple[str, str]]:
-    """If message looks like a weather query, return (location, tool_result). Else None."""
-    lower = (message or "").strip().lower()
-    if "weather" not in lower:
-        return None
-    # "weather in London", "weather for Berlin", "weather at Tokyo", "what's the weather in Paris"
-    match = re.search(
-        r"weather\s+(?:in|for|at)\s+(.+?)(?:\?|$)",
-        lower,
-        re.IGNORECASE | re.DOTALL,
-    )
-    if match:
-        location = match.group(1).strip()
-    else:
-        # "what's the weather" -> might have location after; or use a default
-        parts = re.sub(r"what'?s?\s+the\s+weather\s*", "", lower, flags=re.IGNORECASE).strip()
-        parts = re.sub(r"^[\s?,]+", "", parts)
-        location = parts if parts else "London"
-    if not location or len(location) > 100:
-        location = "London"
-    from tools import get_weather
-
-    result = get_weather(location)
-    return (location, result)
+from tools.runner import run_tools_for_turn
 
 
 async def _supervisor_node(state: RouterState) -> RouterState:
@@ -88,13 +62,10 @@ async def _chat_node(state: RouterState) -> RouterState:
     except Exception:
         pass
 
-    # Optional tool use (e.g. weather)
-    tool_used = None
-    weather_tool = _try_weather_tool(message or "")
-    if weather_tool:
-        location, tool_result = weather_tool
-        tool_used = {"name": "weather", "input": location, "result": tool_result}
-        memory_context = (memory_context or "") + f"\n\n[Tool result – weather for {location}]: {tool_result}\nUse this to answer the user."
+    # Tool calls: every turn has conversation; then run applicable tools (weather, etc.) and inject results
+    tool_system, tool_used = run_tools_for_turn(message or "", recent_turns=recent_turns or [])
+    if tool_system:
+        memory_context = (memory_context or "") + "\n\n" + tool_system
 
     # Build system content (memory + tool) and call with history so the model sees the conversation
     system_content = (memory_context or "").strip() or None
