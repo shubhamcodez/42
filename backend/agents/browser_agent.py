@@ -38,6 +38,8 @@ PAGE_SUMMARY_SCRIPT = """
 
 def _extract_url_from_goal(goal: str) -> Optional[str]:
     """Extract a URL from the goal text, or build one for common intents."""
+    from urllib.parse import quote_plus
+
     goal_lower = goal.lower().strip()
     # Explicit URL
     m = re.search(r"https?://[^\s]+", goal_lower, re.IGNORECASE)
@@ -50,8 +52,13 @@ def _extract_url_from_goal(goal: str) -> Optional[str]:
     # "search google for X" or "google X"
     if "search google" in goal_lower or goal_lower.startswith("google "):
         q = re.sub(r"(?:search google for|google)\s+", "", goal_lower).strip()
-        from urllib.parse import quote_plus
         return f"https://www.google.com/search?q={quote_plus(q)}"
+    # Weather-related: open a search so the user can get weather (e.g. "check weather for my location")
+    if "weather" in goal_lower:
+        return f"https://www.google.com/search?q={quote_plus(goal.strip())}"
+    # Fallback: treat the whole goal as a search query
+    if goal_lower:
+        return f"https://www.google.com/search?q={quote_plus(goal.strip())}"
     return None
 
 

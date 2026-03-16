@@ -3,8 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import queue
+import sys
 import time
 from typing import Optional
+
+# Windows: default event loop must support subprocesses (Playwright browser launch)
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 import json
 
@@ -238,7 +243,7 @@ async def send_message_stream(body: SendMessageRequest):
             finally:
                 chunk_queue.put(None)
 
-        asyncio.create_task(loop.run_in_executor(None, producer))
+        asyncio.ensure_future(loop.run_in_executor(None, producer))
         full = []
         while True:
             chunk = await loop.run_in_executor(None, chunk_queue.get)
