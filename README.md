@@ -19,36 +19,28 @@ You (or a future automation layer) apply those instructions and suggestions; the
 
 ---
 
-## Memory: cross-chat RAG + broader plan
+## Memory architecture (planned)
 
-**Implemented:** Past **user/assistant** chat turns are embedded and stored in **Chroma** (`jarvis-chroma/` by default). New assistant messages trigger re-index of that chat; semantic search pulls relevant **other** conversations into context on **chat** turns. See **`backend/MEMORY.md`**.
+Structured memory so the model can use past chats, docs, and code without dumping everything into the prompt.
 
-**Planned beyond chats:** docs, code symbols, summary tier, working state.
-
-**Four stores (target architecture)**
+**Four stores**
 
 - **Raw chunk store** — `chunk_id`, `content`, `source_type` (chat, code, doc, note), `source_id`, `created_at`, `version`, `metadata`. Persistence for all ingested content.
-- **Vector index** (**Chroma** for chats today) — `chunk_id`, `embedding`, lightweight metadata filters. Fast semantic retrieval.
+- **Vector index** (e.g. **Chroma**) — `chunk_id`, `embedding`, lightweight metadata filters. Fast semantic retrieval.
 - **Summary store** — `summary_id`, `chunk_id` or `parent_id`, short summary, structured facts/entities/decisions. Prompt-ready compression.
 - **Working state store** — Current task, active files, recent decisions, unresolved questions, last retrieved memory set. Per-session continuity.
 
-**Chunk IDs vs context (long chats / many hits)**
-
-- Each stored unit has a stable **`chunk_id`** (e.g. `1774150673:0:4` = chat id + turn window). **Chroma** keeps the mapping **chunk_id → full text + metadata** (the document body).
-- In the **LLM system prompt**, retrieval lists **chunk_id + short summary + source chat + score** by default — **not** the full chunk body — so token use stays bounded even with long histories.
-- When exact wording or deeper context is needed, resolve ids with **`GET /memory/chunks?ids=id1,id2`** (returns full `content` for those chunks). Optional: set **`JARVIS_MEMORY_RAW_CHUNKS=N`** to inline the top *N* hits’ full text in the prompt (see `backend/MEMORY.md`).
-
 **Chunking**
 
-- **Chats:** Windowed turns (currently 4 messages per chunk for indexing), preserve speaker lines. Metadata includes `source_id` (chat file id).
+- **Chats:** 1–5 message windows, preserve speaker turns, no split across a decision. Metadata: `conversation_id`, `turn_range`, intent, decisions, open loops.
 - **Docs:** Headings/sections first, then paragraph windows; ~10–20% overlap.
 - **Code:** By file, class, function, method, config/schema block (not plain text). Metadata: `file_path`, `symbol_name`, `symbol_type`, imports/exports, line range, repo version.
 
 **Flow**
 
-- **Ingestion:** Parse → chunk → enrich metadata → embed → write to vector DB (Chroma stores id ↔ document mapping).
-- **Retrieval:** Embed query → vector search → build prompt line **per chunk_id** (summary-first); expand full text only for top N if configured or via API.
-- **Prompt assembly:** System + current request + **chunk index** (ids + short summaries) + optional inline bodies + task state; token budget stays under control.
+- **Ingestion:** Parse → chunk → enrich metadata → summarize → embed → write to raw store, vector DB, summary store.
+- **Retrieval:** Query understanding → hybrid retrieval (vector + keyword + structural) → rerank → select summaries + raw chunks.
+- **Prompt assembly:** System + current request + task state + retrieved summaries + selected chunks, with token budgets (e.g. summaries first, raw chunks selectively).
 - **After each turn:** Update working state; write back only important turns (decisions, facts, artifacts) to avoid clutter.
 
-Chroma is used for **chat** vectors and the **chunk_id → content** mapping; the rest of the pipeline above is the long-term direction.
+This gives persistence, fast retrieval, prompt-ready summaries, and current-session continuity. Chroma is the intended vector DB for the MVP.

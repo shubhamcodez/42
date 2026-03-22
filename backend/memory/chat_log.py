@@ -110,14 +110,6 @@ def delete_chat(chat_id: str) -> bool:
         return False
     if _current_path is not None and _current_path.resolve() == path.resolve():
         _current_path = None
-    try:
-        from memory import get_memory_store
-
-        store = get_memory_store()
-        if hasattr(store, "delete_by_source_id"):
-            store.delete_by_source_id(chat_id)
-    except Exception:
-        pass
     return True
 
 

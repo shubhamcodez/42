@@ -18,12 +18,10 @@ def retrieve(
     top_k: int = 10,
     min_score: Optional[float] = 0.2,
     source_types: Optional[List[str]] = None,
-    exclude_source_id: Optional[str] = None,
 ) -> List[SearchResult]:
     """
     Embed the query, run vector search, return ranked results.
     Uses OpenAI for embedding (openai_api_key required).
-    exclude_source_id: omit chunks from this chat (e.g. current chat — history is already in-window).
     """
     if not query_text.strip():
         return []
@@ -33,49 +31,33 @@ def retrieve(
         top_k=top_k,
         min_score=min_score,
         source_types=source_types,
-        exclude_source_id=exclude_source_id,
     )
 
 
 def format_retrieved_for_prompt(
     results: List[SearchResult],
-    include_raw_top_n: int = 0,
+    include_raw_top_n: int = 3,
     max_raw_chars: int = 2000,
-    max_summary_chars: int = 220,
 ) -> str:
     """
-    Build the string to inject into the model context.
-
-    Default (long-context / many-hit mode): **chunk_id + short summary + source chat** only.
-    Full chunk text lives in the vector store; resolve by id via GET /memory/chunks?ids=...
-
-    If include_raw_top_n > 0, the top N hits also include a truncated **Content:** block.
+    Build the string to inject into the model context:
+    - Summaries for all top results (brief)
+    - Raw content only for the top include_raw_top_n (truncated by max_raw_chars).
     """
     if not results:
         return ""
 
-    lines: List[str] = [
-        "Semantic memory from **other past conversations** (current thread may be excluded). "
-        "Each line is a **chunk_id** you can cite; full text is **not** inlined unless a Content block follows.",
-        "To load full text for specific ids (e.g. exact quotes), use **GET /memory/chunks?ids=id1,id2** (up to 25 ids).",
-        "",
-        "**Chunk index (id → short summary):**",
-    ]
+    lines: List[str] = ["Relevant context from past conversations and stored memory:"]
     for i, r in enumerate(results):
-        summary = (r.summary or (r.raw_content or "")[:max_summary_chars] or "").strip()
-        if len(summary) > max_summary_chars:
-            summary = summary[: max_summary_chars - 1] + "…"
-        src = (r.metadata or {}).get("source_id") or "?"
-        if not summary:
-            summary = "(no summary)"
-        lines.append(
-            f"- **chunk_id** `{r.chunk_id}` | chat `{src}` | score {r.score} | {summary}"
-        )
-        if i < include_raw_top_n and r.raw_content:
+        summary = (r.summary or r.raw_content or "").strip()
+        if summary and i < include_raw_top_n and r.raw_content:
             content = (r.raw_content or "")[:max_raw_chars]
             if len((r.raw_content or "")) > max_raw_chars:
                 content += "..."
+            lines.append(f"- [{r.chunk_id}] (score {r.score}) {summary}")
             lines.append(f"  Content: {content}")
+        elif summary:
+            lines.append(f"- [{r.chunk_id}] (score {r.score}) {summary}")
     return "\n".join(lines)
 
 
@@ -91,7 +73,6 @@ def run_retrieval_pipeline(
     top_k: int = 10,
     include_raw_top_n: int = 3,
     min_score: Optional[float] = 0.2,
-    exclude_chat_id: Optional[str] = None,
 ) -> tuple[str, List[SearchResult]]:
     """
     Full pipeline: build query from context → vector search → format for prompt.
@@ -110,15 +91,6 @@ def run_retrieval_pipeline(
         query_text=query_text,
         top_k=top_k,
         min_score=min_score,
-        exclude_source_id=(
-            exclude_chat_id.strip()
-            if exclude_chat_id and str(exclude_chat_id).strip()
-            else None
-        ),
     )
-    context_str = format_retrieved_for_prompt(
-        results,
-        include_raw_top_n=include_raw_top_n,
-        max_summary_chars=max_summary_chars,
-    )
+    context_str = format_retrieved_for_prompt(results, include_raw_top_n=include_raw_top_n)
     return context_str, results

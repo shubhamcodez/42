@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from .schemas import Chunk, SearchResult
 
@@ -34,21 +34,12 @@ class VectorStore:
         self._chunks.append(chunk)
         self._embeddings.append(embedding)
 
-    def delete_by_source_id(self, source_id: str) -> None:
-        """Drop all chunks whose source_id matches (e.g. one chat)."""
-        if not source_id:
-            return
-        keep: List[int] = [i for i, c in enumerate(self._chunks) if c.source_id != source_id]
-        self._chunks = [self._chunks[i] for i in keep]
-        self._embeddings = [self._embeddings[i] for i in keep]
-
     def search(
         self,
         query_embedding: List[float],
         top_k: int = 10,
         min_score: Optional[float] = None,
         source_types: Optional[List[str]] = None,
-        exclude_source_id: Optional[str] = None,
     ) -> List[SearchResult]:
         """
         Return top_k hits by cosine similarity.
@@ -64,12 +55,6 @@ class VectorStore:
         if source_types is not None:
             st_set = set(source_types)
             indexed = [(i, s) for i, s in indexed if self._chunks[i].source_type in st_set]
-        if exclude_source_id:
-            indexed = [
-                (i, s)
-                for i, s in indexed
-                if self._chunks[i].source_id != exclude_source_id
-            ]
         indexed.sort(key=lambda x: -x[1])
         top = indexed[:top_k]
 
@@ -84,29 +69,6 @@ class VectorStore:
                     metadata=c.metadata.copy(),
                     raw_content=c.content,
                 )
-            )
-        return out
-
-    def get_by_chunk_ids(self, chunk_ids: List[str]) -> list[dict[str, Any]]:
-        """Resolve chunk_id → full text + metadata (same mapping Chroma uses)."""
-        if not chunk_ids:
-            return []
-        want = set(chunk_ids)
-        out: list[dict[str, Any]] = []
-        for c in self._chunks:
-            if c.chunk_id not in want:
-                continue
-            out.append(
-                {
-                    "chunk_id": c.chunk_id,
-                    "content": c.content,
-                    "metadata": {
-                        "source_id": c.source_id,
-                        "source_type": c.source_type,
-                        "summary": c.summary or "",
-                        **(c.metadata or {}),
-                    },
-                }
             )
         return out
 

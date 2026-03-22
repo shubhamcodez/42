@@ -1,6 +1,6 @@
 # JARVIS Agent Workflow
 
-End-to-end flow from user message to reply: routing, supervisor, desktop/coding/shell/**finance** agents, **cross-chat memory** (Chroma RAG for chat turns), and **self-improving evals**.
+End-to-end flow from user message to reply: routing, supervisor, desktop/coding/shell/**finance** agents, **memory** (planned), and **self-improving evals**.
 
 ---
 
@@ -196,26 +196,27 @@ So: **traces → evals → scores → optimization → prompt/code suggestions �
 
 ---
 
-## 10. Memory: cross-chat RAG (implemented) + fuller architecture (planned)
+## 10. Memory architecture (planned)
 
-### 10a. Chroma chat RAG (live): persistent DB at `jarvis-chroma/`, windows of 4 user/assistant turns, OpenAI embeddings; indexed on each assistant `POST /chat/append`; retrieval on **chat** excludes current `chat_id`. Prompt lists **chunk_id + short summary** by default (full text stays in Chroma); load bodies with **`GET /memory/chunks?ids=…`** or set **`JARVIS_MEMORY_RAW_CHUNKS`** (see `backend/MEMORY.md`).  
+Structured memory so the model can use past chats, docs, and code without filling the whole context.
 
-### 10b. Fuller memory (still planned): docs/code and summary tier.
-
-**Planned additional stores (beyond Chroma chats)**
+**Four stores**
 
 - **Raw chunk store** — chunk_id, content, source_type (chat, code, doc, note), source_id, created_at, version, metadata.  
-- **Vector / retrieval expansion** — extend Chroma with docs, code, hybrid + rerank.  
+- **Vector index** (Chroma) — chunk_id, embedding, metadata filters; fast semantic retrieval.  
 - **Summary store** — summary_id, chunk_id/parent_id, short summary, facts/entities/decisions.  
 - **Working state store** — current task, active files, recent decisions, unresolved questions, last retrieved chunk set.
 
-**Per-turn flow (when fully wired)**
+**Per-turn flow (when memory is wired in)**
 
-- **A–D.** Parse → task state → hybrid retrieval → assemble prompt with token budgets.  
-- **E. Generate** — supervisor → chat | desktop | coding | shell | finance → reply.  
-- **F. Update memory** — Write-back important turns and non-chat artifacts.
+- **A. Parse request** — Intent, entities, active artifact, source type.  
+- **B. Load task state** — Fetch working state for this session/conversation.  
+- **C. Retrieve** — Query understanding → hybrid retrieval (vector + keyword + structural) → rerank → select summaries + raw chunks.  
+- **D. Assemble prompt** — System + current request + task state + retrieved summaries + selected chunks (token budget: e.g. 10% task state, 20% retrieved, 35% raw, 20% response headroom).  
+- **E. Generate** — Existing flow: supervisor → chat | desktop | coding | shell | finance → reply.  
+- **F. Update memory** — Update working state; **write-back** only important turns (decisions, facts, artifacts) into raw store → chunk → summarize → embed → vector + summary stores.
 
-Chunking for **docs/code** as in README; **chats** already chunked for Chroma as in §10a.
+Chunking: **chats** by 1–5 message windows (conversation_id, turn_range, decisions); **docs** by sections/paragraphs with overlap; **code** by file/symbol (no plain-text chunking). See README for full memory design.
 
 ---
 

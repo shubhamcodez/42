@@ -27,19 +27,12 @@ warnings.filterwarnings(
 
 import json
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from config import (
-    get_llm_api_key,
-    get_llm_provider,
-    get_openai_api_key,
-    memory_retrieval_raw_top_n,
-    memory_retrieval_summary_max_chars,
-    set_llm_provider,
-)
+from config import get_llm_api_key, get_llm_provider, get_openai_api_key, set_llm_provider
 from agents.models import get_llm_client
 from agents.supervisor import supervisor_decision
 from memory import get_memory_store, ingest_chat, run_retrieval_pipeline
@@ -389,14 +382,11 @@ async def send_message_stream(body: SendMessageRequest):
             store = get_memory_store()
             if len(store) > 0:
                 sys_content, _ = run_retrieval_pipeline(
-                    store,
-                    get_openai_api_key(),
+                    store, get_openai_api_key(),
                     current_message=message,
                     recent_turns=hist or [],
                     task_state={"route": "chat"},
-                    top_k=10,
-                    include_raw_top_n=3,
-                    exclude_chat_id=chat_id or None,
+                    top_k=10, include_raw_top_n=3,
                 )
                 sys_content = (sys_content or "").strip() or None
         except Exception:
@@ -648,15 +638,6 @@ async def send_message_stream(body: SendMessageRequest):
 @app.post("/chat/append")
 async def api_append_chat_log(body: AppendChatLogRequest):
     append_chat_log(body.role, body.content)
-    # Re-index current chat into Chroma after each assistant turn (RAG across past chats).
-    if body.role == "assistant":
-        cid = get_current_chat_id()
-        if cid:
-            try:
-                key = get_openai_api_key()
-                await asyncio.to_thread(ingest_chat, get_memory_store(), key, cid)
-            except Exception:
-                pass
     return {}
 
 
@@ -702,54 +683,14 @@ class IngestChatRequest(BaseModel):
 
 @app.post("/memory/ingest")
 async def api_memory_ingest(body: IngestChatRequest):
-    """Ingest a chat's history into Chroma for cross-chat retrieval. Requires OPENAI_API_KEY."""
+    """Ingest a chat's history into the vector store for retrieval. Requires OPENAI_API_KEY."""
     try:
         api_key = get_openai_api_key()
     except Exception as e:
         return {"ok": False, "error": str(e), "chunks_added": 0}
     store = get_memory_store()
-    n = await asyncio.to_thread(ingest_chat, store, api_key, body.chat_id)
+    n = ingest_chat(store, api_key, body.chat_id)
     return {"ok": True, "chunks_added": n}
-
-
-@app.get("/memory/chunks")
-async def api_memory_chunks(ids: str = Query(..., description="Comma-separated chunk_id values")):
-    """
-    Resolve memory chunk_ids to full stored text (Chroma / vector mapping).
-    Use when the model or UI needs exact content beyond the id+summary line in context.
-    """
-    id_list = [x.strip() for x in ids.split(",") if x.strip()]
-    if not id_list:
-        raise HTTPException(status_code=400, detail="Provide at least one id")
-    if len(id_list) > 25:
-        raise HTTPException(status_code=400, detail="Maximum 25 ids per request")
-    store = get_memory_store()
-    getter = getattr(store, "get_by_chunk_ids", None)
-    if not callable(getter):
-        return {"chunks": []}
-    chunks = await asyncio.to_thread(getter, id_list)
-    return {"chunks": chunks}
-
-
-@app.post("/memory/reindex-all")
-async def api_memory_reindex_all():
-    """Embed every chat in the chats folder into Chroma (bootstrap or repair). Requires OPENAI_API_KEY."""
-    try:
-        api_key = get_openai_api_key()
-    except Exception as e:
-        return {"ok": False, "error": str(e), "chats_processed": 0, "chunks_added": 0}
-    store = get_memory_store()
-    entries = list_chats()
-    total_chunks = 0
-
-    def _run():
-        n = 0
-        for e in entries:
-            n += ingest_chat(store, api_key, e["id"])
-        return n
-
-    total_chunks = await asyncio.to_thread(_run)
-    return {"ok": True, "chats_processed": len(entries), "chunks_added": total_chunks}
 
 
 # --- Storage ---
