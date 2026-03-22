@@ -11,6 +11,9 @@ load_dotenv(_ROOT / ".env")
 # LLM provider: "openai" or "xai"
 LLM_PROVIDER_FILE = _ROOT / "jarvis-llm-provider.txt"
 
+# Default directory for GET /tools/grep when `root` is omitted (optional)
+GREP_ROOT_FILE = _ROOT / "jarvis-grep-root.txt"
+
 
 def get_llm_provider() -> str:
     """Current LLM provider: 'openai' or 'xai'. Default openai."""
@@ -68,3 +71,42 @@ def chats_dir() -> Path:
             if d.is_dir() or not d.exists():
                 return d
     return _ROOT / "chats"
+
+
+def get_grep_root() -> Path | None:
+    """
+    Optional default search root for file grep: JARVIS_GREP_ROOT env, else jarvis-grep-root.txt.
+    Returns None if unset or path is not an existing directory.
+    """
+    env = (os.environ.get("JARVIS_GREP_ROOT") or "").strip()
+    if env:
+        p = Path(env).expanduser().resolve()
+        return p if p.is_dir() else None
+    if GREP_ROOT_FILE.exists():
+        s = GREP_ROOT_FILE.read_text(encoding="utf-8").strip()
+        if s:
+            p = Path(s).expanduser().resolve()
+            return p if p.is_dir() else None
+    return None
+
+
+def get_chat_history_limit() -> int:
+    """
+    Max chat log messages sent to the LLM each turn (router + streaming chat).
+    Override with JARVIS_CHAT_HISTORY_LIMIT (clamped 1–500). Default 120.
+    """
+    raw = (os.environ.get("JARVIS_CHAT_HISTORY_LIMIT") or "").strip()
+    if raw.isdigit():
+        return max(1, min(int(raw), 500))
+    return 120
+
+
+def get_memory_query_recent_turns() -> int:
+    """
+    How many recent messages from the log are folded into the vector-memory retrieval query string.
+    Override with JARVIS_MEMORY_QUERY_RECENT_TURNS (clamped 1–80). Default 12.
+    """
+    raw = (os.environ.get("JARVIS_MEMORY_QUERY_RECENT_TURNS") or "").strip()
+    if raw.isdigit():
+        return max(1, min(int(raw), 80))
+    return 12

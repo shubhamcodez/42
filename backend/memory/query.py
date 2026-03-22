@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from config import get_memory_query_recent_turns
+
 # RouterState is TypedDict with message, goal, supervisor_decision, etc.
 # We accept a minimal dict to avoid coupling to agents.state in case of circular imports.
 
@@ -25,8 +27,8 @@ def build_retrieval_query(
         parts.append("Current request: " + current_message)
 
     if recent_turns:
-        # Last N turns for context (e.g. last 2–4 messages)
-        recent = recent_turns[-6:]  # up to 3 user + 3 assistant
+        n = get_memory_query_recent_turns()
+        recent = recent_turns[-n:]
         for t in recent:
             role = (t.get("role") or "user").strip().lower()
             content = (t.get("content") or "").strip()

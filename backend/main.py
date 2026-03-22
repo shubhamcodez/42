@@ -6,6 +6,7 @@ import queue
 import sys
 import time
 import warnings
+from pathlib import Path
 from typing import Optional
 
 # Windows: Proactor is required for asyncio subprocesses (e.g. shell tools). Without it,
@@ -32,7 +33,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from config import get_llm_api_key, get_llm_provider, get_openai_api_key, set_llm_provider
+from config import (
+    get_chat_history_limit,
+    get_grep_root,
+    get_llm_api_key,
+    get_llm_provider,
+    get_openai_api_key,
+    set_llm_provider,
+)
 from agents.models import get_llm_client
 from agents.supervisor import supervisor_decision
 from memory import get_memory_store, ingest_chat, run_retrieval_pipeline
@@ -57,6 +65,7 @@ from observability.human_eval import run_human_eval_benchmark
 from tools import get_weather, try_weather_tool
 from tools.python_sandbox import run_sandboxed_python
 from tools.sandbox_markdown import redact_sandbox_result_dict
+from tools.file_grep import grep_files
 from tools.shell_runner import is_shell_enabled, run_shell_command
 
 app = FastAPI(title="JARVIS API")
@@ -375,7 +384,8 @@ async def send_message_stream(body: SendMessageRequest):
     def _chat_history_and_system():
         """Every conversation: (1) load full history, (2) run tool calls (e.g. weather), (3) build system. Returns (hist, sys_content, tool_used)."""
         # 1) Conversation history goes into every turn (same for all messages in this chat)
-        hist = read_chat_log(chat_id)[-40:] if chat_id else None
+        _lim = get_chat_history_limit()
+        hist = read_chat_log(chat_id)[-_lim:] if chat_id else None
         sys_content = None
         try:
             from config import get_openai_api_key
@@ -823,6 +833,43 @@ async def api_tools_weather(location: str = Query(..., description="City or plac
     """Get current weather for a location (Open-Meteo, no API key)."""
     result = await asyncio.to_thread(get_weather, location)
     return {"location": location, "result": result}
+
+
+@app.get("/tools/grep")
+async def api_tools_grep(
+    q: str = Query(..., description="Search pattern (literal by default; set regex=1 for regex)"),
+    root: Optional[str] = Query(
+        None,
+        description="Directory to search (defaults to JARVIS_GREP_ROOT or jarvis-grep-root.txt)",
+    ),
+    limit: int = Query(100, ge=1, le=5000),
+    regex: bool = Query(False, description="If true, pattern is a regex (ripgrep / Python re)"),
+    case_sensitive: bool = Query(False),
+):
+    """
+    Search files under a directory like Cursor-style ripgrep (uses `rg` when on PATH, else Python scan).
+    Skips common noise dirs (.git, node_modules, __pycache__, …). No vector index.
+    """
+    raw_root = (root or "").strip()
+    if raw_root:
+        base = Path(raw_root).expanduser()
+    else:
+        gr = get_grep_root()
+        if gr is None:
+            return {
+                "ok": False,
+                "error": "No search root: pass root= or set JARVIS_GREP_ROOT or create jarvis-grep-root.txt with a directory path.",
+                "matches": [],
+            }
+        base = gr
+    return await asyncio.to_thread(
+        grep_files,
+        base,
+        q.strip(),
+        max_results=limit,
+        fixed_string=not regex,
+        ignore_case=not case_sensitive,
+    )
 
 
 @app.post("/tools/python-sandbox")

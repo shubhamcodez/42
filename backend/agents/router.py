@@ -23,7 +23,7 @@ async def _supervisor_node(state: RouterState) -> RouterState:
 
 async def _chat_node(state: RouterState) -> RouterState:
     from agents.models import get_llm_client
-
+    from config import get_chat_history_limit, get_openai_api_key
     from memory import get_memory_store, run_retrieval_pipeline
     from memory.chat_log import read_chat_log
 
@@ -38,14 +38,12 @@ async def _chat_node(state: RouterState) -> RouterState:
     chat_id = state.get("chat_id") or ""
     # Load conversation history (frontend already appended current user message)
     recent_turns = read_chat_log(chat_id) if chat_id else []
-    max_history = 40
+    max_history = get_chat_history_limit()
     history = recent_turns[-max_history:] if recent_turns else None
 
     # Retrieval: current conversation → query → vector search → inject as system context
     memory_context = ""
     try:
-        from config import get_openai_api_key
-
         store = get_memory_store()
         if len(store) > 0:
             openai_api_key = get_openai_api_key()
