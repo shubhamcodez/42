@@ -44,7 +44,7 @@ async def _chat_node(state: RouterState) -> RouterState:
     # Retrieval: current conversation → query → vector search → inject as system context
     memory_context = ""
     try:
-        from config import get_openai_api_key
+        from config import get_openai_api_key, memory_retrieval_raw_top_n, memory_retrieval_summary_max_chars
 
         store = get_memory_store()
         if len(store) > 0:
@@ -57,7 +57,8 @@ async def _chat_node(state: RouterState) -> RouterState:
                 recent_turns=recent_turns,
                 task_state=task_state,
                 top_k=10,
-                include_raw_top_n=3,
+                include_raw_top_n=memory_retrieval_raw_top_n(),
+                max_summary_chars=memory_retrieval_summary_max_chars(),
                 exclude_chat_id=chat_id or None,
             )
     except Exception:

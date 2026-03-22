@@ -37,7 +37,7 @@ class ChromaChatMemory:
 
     COLLECTION = "jarvis_chat_chunks"
 
-    def __init__(self, persist_path: Optional[Any] = None) -> None:
+    def __init__(self, persist_path: Optional[Path] = None) -> None:
         path = persist_path or chroma_dir()
         path.mkdir(parents=True, exist_ok=True)
         self._path = path
@@ -143,3 +143,22 @@ class ChromaChatMemory:
 
     def __len__(self) -> int:
         return self.count()
+
+    def get_by_chunk_ids(self, chunk_ids: List[str]) -> list[dict[str, Any]]:
+        """Resolve chunk_id → full document + metadata stored in Chroma."""
+        if not chunk_ids:
+            return []
+        unique = list(dict.fromkeys(chunk_ids))
+        try:
+            res = self._col.get(ids=unique, include=["documents", "metadatas"])
+        except Exception:
+            return []
+        ids = res.get("ids") or []
+        docs = res.get("documents") or []
+        metas = res.get("metadatas") or []
+        out: list[dict[str, Any]] = []
+        for i, cid in enumerate(ids):
+            meta = dict(metas[i]) if i < len(metas) and metas[i] else {}
+            content = docs[i] if i < len(docs) else ""
+            out.append({"chunk_id": cid, "content": content, "metadata": meta})
+        return out

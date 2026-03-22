@@ -39,30 +39,43 @@ def retrieve(
 
 def format_retrieved_for_prompt(
     results: List[SearchResult],
-    include_raw_top_n: int = 3,
+    include_raw_top_n: int = 0,
     max_raw_chars: int = 2000,
+    max_summary_chars: int = 220,
 ) -> str:
     """
-    Build the string to inject into the model context:
-    - Summaries for all top results (brief)
-    - Raw content only for the top include_raw_top_n (truncated by max_raw_chars).
+    Build the string to inject into the model context.
+
+    Default (long-context / many-hit mode): **chunk_id + short summary + source chat** only.
+    Full chunk text lives in the vector store; resolve by id via GET /memory/chunks?ids=...
+
+    If include_raw_top_n > 0, the top N hits also include a truncated **Content:** block.
     """
     if not results:
         return ""
 
     lines: List[str] = [
-        "Relevant excerpts from **other past conversations** (semantic search; current chat may be excluded to avoid duplication with your recent messages):"
+        "Semantic memory from **other past conversations** (current thread may be excluded). "
+        "Each line is a **chunk_id** you can cite; full text is **not** inlined unless a Content block follows.",
+        "To load full text for specific ids (e.g. exact quotes), use **GET /memory/chunks?ids=id1,id2** (up to 25 ids).",
+        "",
+        "**Chunk index (id → short summary):**",
     ]
     for i, r in enumerate(results):
-        summary = (r.summary or r.raw_content or "").strip()
-        if summary and i < include_raw_top_n and r.raw_content:
+        summary = (r.summary or (r.raw_content or "")[:max_summary_chars] or "").strip()
+        if len(summary) > max_summary_chars:
+            summary = summary[: max_summary_chars - 1] + "…"
+        src = (r.metadata or {}).get("source_id") or "?"
+        if not summary:
+            summary = "(no summary)"
+        lines.append(
+            f"- **chunk_id** `{r.chunk_id}` | chat `{src}` | score {r.score} | {summary}"
+        )
+        if i < include_raw_top_n and r.raw_content:
             content = (r.raw_content or "")[:max_raw_chars]
             if len((r.raw_content or "")) > max_raw_chars:
                 content += "..."
-            lines.append(f"- [{r.chunk_id}] (score {r.score}) {summary}")
             lines.append(f"  Content: {content}")
-        elif summary:
-            lines.append(f"- [{r.chunk_id}] (score {r.score}) {summary}")
     return "\n".join(lines)
 
 
@@ -103,5 +116,9 @@ def run_retrieval_pipeline(
             else None
         ),
     )
-    context_str = format_retrieved_for_prompt(results, include_raw_top_n=include_raw_top_n)
+    context_str = format_retrieved_for_prompt(
+        results,
+        include_raw_top_n=include_raw_top_n,
+        max_summary_chars=max_summary_chars,
+    )
     return context_str, results

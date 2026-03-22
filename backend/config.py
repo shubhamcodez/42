@@ -76,3 +76,24 @@ def chroma_dir() -> Path:
     if custom:
         return Path(custom)
     return _ROOT / "jarvis-chroma"
+
+
+def memory_retrieval_raw_top_n() -> int:
+    """
+    How many top memory hits include full chunk text in the system prompt (0 = IDs + short summaries only).
+    Set JARVIS_MEMORY_RAW_CHUNKS=1..10 to expand the strongest matches inline.
+    """
+    raw = os.environ.get("JARVIS_MEMORY_RAW_CHUNKS", "0").strip()
+    try:
+        return max(0, min(10, int(raw)))
+    except ValueError:
+        return 0
+
+
+def memory_retrieval_summary_max_chars() -> int:
+    """Max characters per hit summary line in the prompt (longer chats stay token-light)."""
+    raw = os.environ.get("JARVIS_MEMORY_SUMMARY_CHARS", "220").strip()
+    try:
+        return max(40, min(800, int(raw)))
+    except ValueError:
+        return 220

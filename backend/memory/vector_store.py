@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import math
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from .schemas import Chunk, SearchResult
 
@@ -84,6 +84,29 @@ class VectorStore:
                     metadata=c.metadata.copy(),
                     raw_content=c.content,
                 )
+            )
+        return out
+
+    def get_by_chunk_ids(self, chunk_ids: List[str]) -> list[dict[str, Any]]:
+        """Resolve chunk_id → full text + metadata (same mapping Chroma uses)."""
+        if not chunk_ids:
+            return []
+        want = set(chunk_ids)
+        out: list[dict[str, Any]] = []
+        for c in self._chunks:
+            if c.chunk_id not in want:
+                continue
+            out.append(
+                {
+                    "chunk_id": c.chunk_id,
+                    "content": c.content,
+                    "metadata": {
+                        "source_id": c.source_id,
+                        "source_type": c.source_type,
+                        "summary": c.summary or "",
+                        **(c.metadata or {}),
+                    },
+                }
             )
         return out
 

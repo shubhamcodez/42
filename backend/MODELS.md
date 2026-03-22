@@ -13,4 +13,6 @@ xAI uses `XAI_CHAT_MODEL` / `XAI_VISION_MODEL` in `agents/models/xai_client.py`.
 
 Host **shell** agent: enable with `JARVIS_ENABLE_SHELL=1`; see `backend/SHELL.md`.
 
+**Memory / RAG:** Chroma chat index uses OpenAI **`text-embedding-3-small`** (`memory/embeddings.py`); `OPENAI_API_KEY` required for embeddings even if chat uses xAI.
+
 **Finance** agent uses **yfinance** (install: `pip install yfinance` / `poetry add yfinance`). The **coding** agent sandbox also allows **matplotlib**, **numpy**, **pandas**, and **yfinance** for plots and quantitative analysis (`poetry add matplotlib numpy pandas` or `pip install …`). Data is informational, not financial advice.

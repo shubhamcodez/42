@@ -19,6 +19,14 @@ On **chat** turns (not agent runs), if the store is non-empty, the backend build
 
 - **Current chat is excluded** from hits so you mainly see *other* threads (e.g. “apples” from a month ago) without duplicating what’s already in the sliding history window.
 
+### Chunk IDs in context (token-efficient)
+
+- Chroma stores **`chunk_id` → full document** (the chunk text) plus metadata (`source_id`, `summary`, …).
+- The default prompt lists each hit as **`chunk_id` + short summary + source chat + score** — **not** the full body — so long histories and many hits stay cheap in tokens.
+- **Resolve full text when needed:** `GET /memory/chunks?ids=chunk_id_1,chunk_id_2` (max 25 ids). Response: `{ "chunks": [ { "chunk_id", "content", "metadata" }, ... ] }`.
+- **Optional inline bodies:** set **`JARVIS_MEMORY_RAW_CHUNKS`** to `1`…`10` to append a truncated **Content:** block for the top N hits (strongest matches first).
+- **Summary line length:** **`JARVIS_MEMORY_SUMMARY_CHARS`** (default `220`, max `800`).
+
 ## Requirements
 
 - **`OPENAI_API_KEY`** — embeddings (and chat) use OpenAI for this pipeline even if the chat model is xAI.
@@ -32,7 +40,7 @@ This **is** standard RAG (retrieve → inject). Improvements to consider later:
 
 - **HyDE** or **query expansion** for better recall on vague questions.
 - **Recency + similarity** hybrid scoring (Chroma metadata: `updated_at` per chunk).
-- **Summarization tier**: store short summaries in metadata and expand only top hits to full text (token budget).
+- **Summarization tier**: implemented in baseline form — summaries in metadata + **chunk_id** in prompt; expand via API or `JARVIS_MEMORY_RAW_CHUNKS`.
 - **Deduplication** across near-identical chunks.
 
 For your “apples again a month later” case, **semantic chunk retrieval + exclude current chat** is the right baseline.

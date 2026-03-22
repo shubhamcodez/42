@@ -27,12 +27,19 @@ warnings.filterwarnings(
 
 import json
 
-from fastapi import FastAPI, File, Form, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from config import get_llm_api_key, get_llm_provider, get_openai_api_key, set_llm_provider
+from config import (
+    get_llm_api_key,
+    get_llm_provider,
+    get_openai_api_key,
+    memory_retrieval_raw_top_n,
+    memory_retrieval_summary_max_chars,
+    set_llm_provider,
+)
 from agents.models import get_llm_client
 from agents.supervisor import supervisor_decision
 from memory import get_memory_store, ingest_chat, run_retrieval_pipeline
@@ -703,6 +710,25 @@ async def api_memory_ingest(body: IngestChatRequest):
     store = get_memory_store()
     n = await asyncio.to_thread(ingest_chat, store, api_key, body.chat_id)
     return {"ok": True, "chunks_added": n}
+
+
+@app.get("/memory/chunks")
+async def api_memory_chunks(ids: str = Query(..., description="Comma-separated chunk_id values")):
+    """
+    Resolve memory chunk_ids to full stored text (Chroma / vector mapping).
+    Use when the model or UI needs exact content beyond the id+summary line in context.
+    """
+    id_list = [x.strip() for x in ids.split(",") if x.strip()]
+    if not id_list:
+        raise HTTPException(status_code=400, detail="Provide at least one id")
+    if len(id_list) > 25:
+        raise HTTPException(status_code=400, detail="Maximum 25 ids per request")
+    store = get_memory_store()
+    getter = getattr(store, "get_by_chunk_ids", None)
+    if not callable(getter):
+        return {"chunks": []}
+    chunks = await asyncio.to_thread(getter, id_list)
+    return {"chunks": chunks}
 
 
 @app.post("/memory/reindex-all")
