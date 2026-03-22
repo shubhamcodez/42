@@ -7,6 +7,7 @@ from typing import Callable, Optional
 
 from agents.models import chat_completion_limit_kwargs, get_llm_client, should_omit_temperature
 from tools.python_sandbox import extract_python_fences, run_sandboxed_python
+from tools.sandbox_markdown import redact_sandbox_result_dict, redact_image_stdout, stdout_to_markdown_body
 
 _CODING_GEN_SYSTEM = """You are JARVIS's coding agent. The user gave a task that should be solved with Python code running in a secure sandbox—not by clicking the desktop.
 
@@ -17,7 +18,7 @@ Output ONLY a JSON object, no markdown fences, with exactly one key:
 
 Rules for the code:
 - Allowed imports (stdlib + sandbox): math, json, itertools, functools, collections, statistics, datetime, decimal, fractions, string, random, re, operator, copy, io, base64, csv, hashlib, typing, warnings, plus **numpy**, **pandas**, **matplotlib**, **yfinance** and their usual dependencies (already whitelisted).
-- **Matplotlib:** the sandbox sets a headless backend; still call `import matplotlib; matplotlib.use("Agg")` before `pyplot` if you use plots. Save figures to a buffer and **print base64** or print summary stats — there is no GUI; stdout text is what the user sees.
+- **Matplotlib:** call `import matplotlib; matplotlib.use("Agg")` before `pyplot`. To show a chart in the chat UI, save PNG to bytes and print **exactly one line**: `JARVIS_IMAGE_PNG:` + base64 (no newlines inside), e.g. `print("JARVIS_IMAGE_PNG:" + base64.b64encode(buf.getvalue()).decode())`. You may print other text before/after on separate lines; those appear as monospace. Raw single-line PNG base64 (starts with `iVBOR`) is also detected.
 - **yfinance:** OK for pulling `Ticker(...).history(...)` or `fast_info` inside your analysis script when the task needs live series.
 - No `open()`, no `os`/`sys`/`subprocess`, no `input()`. Print answers with `print()`.
 - Keep code focused; prefer small readable steps.
@@ -124,7 +125,7 @@ def run_coding_agent(
         fix_msg = (
             "Your previous code failed in the sandbox. Fix it.\n\n"
             f"Code was:\n```\n{code[:3000]}\n```\n\n"
-            f"Sandbox result:\n{json.dumps(result, indent=2)[:4000]}\n\n"
+            f"Sandbox result:\n{json.dumps(redact_sandbox_result_dict(result), indent=2)[:4000]}\n\n"
             'Output ONLY JSON with key "code".'
         )
         raw2 = call_llm(
@@ -147,16 +148,25 @@ def run_coding_agent(
     stdout = (result.get("stdout") or "").strip()
     stderr = (result.get("stderr") or "").strip()
     if result.get("ok"):
-        body = f"**Sandbox stdout:**\n```\n{stdout or '(no output)'}\n```"
+        body = "**Sandbox output:**\n\n" + stdout_to_markdown_body(stdout)
         if stderr:
-            body += f"\n**stderr:**\n```\n{stderr}\n```"
+            body += f"\n\n**stderr:**\n```\n{stderr}\n```"
         reply = (
             f"Coding task (goal: {goal}).\n\n"
             f"{body}\n\n"
             "_Executed in the restricted Python sandbox (no desktop automation)._"
         )
         if on_step:
-            on_step(2, "Sandbox run succeeded.", "done", stdout[:300], stdout, True, screenshot_base64=None)
+            _preview = redact_image_stdout(stdout)
+            on_step(
+                2,
+                "Sandbox run succeeded.",
+                "done",
+                _preview[:300] + ("…" if len(_preview) > 300 else ""),
+                _preview[:1200] + ("…" if len(_preview) > 1200 else ""),
+                True,
+                screenshot_base64=None,
+            )
     else:
         err = result.get("error") or "unknown error"
         tb = (result.get("traceback") or "")[:2000]

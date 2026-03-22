@@ -18,10 +18,12 @@ def retrieve(
     top_k: int = 10,
     min_score: Optional[float] = 0.2,
     source_types: Optional[List[str]] = None,
+    exclude_source_id: Optional[str] = None,
 ) -> List[SearchResult]:
     """
     Embed the query, run vector search, return ranked results.
     Uses OpenAI for embedding (openai_api_key required).
+    exclude_source_id: omit chunks from this chat (e.g. current chat — history is already in-window).
     """
     if not query_text.strip():
         return []
@@ -31,6 +33,7 @@ def retrieve(
         top_k=top_k,
         min_score=min_score,
         source_types=source_types,
+        exclude_source_id=exclude_source_id,
     )
 
 
@@ -47,7 +50,9 @@ def format_retrieved_for_prompt(
     if not results:
         return ""
 
-    lines: List[str] = ["Relevant context from past conversations and stored memory:"]
+    lines: List[str] = [
+        "Relevant excerpts from **other past conversations** (semantic search; current chat may be excluded to avoid duplication with your recent messages):"
+    ]
     for i, r in enumerate(results):
         summary = (r.summary or r.raw_content or "").strip()
         if summary and i < include_raw_top_n and r.raw_content:
@@ -73,6 +78,7 @@ def run_retrieval_pipeline(
     top_k: int = 10,
     include_raw_top_n: int = 3,
     min_score: Optional[float] = 0.2,
+    exclude_chat_id: Optional[str] = None,
 ) -> tuple[str, List[SearchResult]]:
     """
     Full pipeline: build query from context → vector search → format for prompt.
@@ -91,6 +97,11 @@ def run_retrieval_pipeline(
         query_text=query_text,
         top_k=top_k,
         min_score=min_score,
+        exclude_source_id=(
+            exclude_chat_id.strip()
+            if exclude_chat_id and str(exclude_chat_id).strip()
+            else None
+        ),
     )
     context_str = format_retrieved_for_prompt(results, include_raw_top_n=include_raw_top_n)
     return context_str, results

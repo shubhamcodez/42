@@ -1,10 +1,11 @@
 """
 Ingest chat history into the vector store: chunk conversations and embed.
-Call after chat log updates to keep retrieval in sync with available history.
+Call after assistant replies (or via POST /memory/ingest) to keep Chroma in sync.
 """
 from __future__ import annotations
 
 from .chat_log import read_chat_log
+from .chroma_memory import ChromaChatMemory
 from .embeddings import embed_texts
 from .schemas import Chunk
 from .vector_store import VectorStore
@@ -46,11 +47,12 @@ def _chunk_messages(chat_id: str, messages: list[dict]) -> list[Chunk]:
 
 def ingest_chat(store: VectorStore, openai_api_key: str, chat_id: str) -> int:
     """
-    Read chat log for chat_id, chunk into windows, embed, add to store.
-    Returns number of chunks added. Does not deduplicate; call with a fresh store
-    or implement upsert by chunk_id if you need idempotent ingest.
+    Read chat log for chat_id, chunk user+assistant turns, embed, replace vectors for that chat.
+    Idempotent per chat: deletes previous chunks for chat_id then adds fresh ones.
     """
     messages = read_chat_log(chat_id)
+    messages = [m for m in messages if (m.get("role") or "") in ("user", "assistant")]
+    store.delete_by_source_id(chat_id)
     if not messages:
         return 0
     chunks = _chunk_messages(chat_id, messages)
@@ -58,6 +60,9 @@ def ingest_chat(store: VectorStore, openai_api_key: str, chat_id: str) -> int:
         return 0
     texts = [c.content for c in chunks]
     embeddings = embed_texts(openai_api_key, texts)
-    for c, emb in zip(chunks, embeddings):
-        store.add(c, emb)
+    if isinstance(store, ChromaChatMemory):
+        store.upsert_chat_chunks(chunks, embeddings)
+    else:
+        for c, emb in zip(chunks, embeddings):
+            store.add(c, emb)
     return len(chunks)

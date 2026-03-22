@@ -34,12 +34,21 @@ class VectorStore:
         self._chunks.append(chunk)
         self._embeddings.append(embedding)
 
+    def delete_by_source_id(self, source_id: str) -> None:
+        """Drop all chunks whose source_id matches (e.g. one chat)."""
+        if not source_id:
+            return
+        keep: List[int] = [i for i, c in enumerate(self._chunks) if c.source_id != source_id]
+        self._chunks = [self._chunks[i] for i in keep]
+        self._embeddings = [self._embeddings[i] for i in keep]
+
     def search(
         self,
         query_embedding: List[float],
         top_k: int = 10,
         min_score: Optional[float] = None,
         source_types: Optional[List[str]] = None,
+        exclude_source_id: Optional[str] = None,
     ) -> List[SearchResult]:
         """
         Return top_k hits by cosine similarity.
@@ -55,6 +64,12 @@ class VectorStore:
         if source_types is not None:
             st_set = set(source_types)
             indexed = [(i, s) for i, s in indexed if self._chunks[i].source_type in st_set]
+        if exclude_source_id:
+            indexed = [
+                (i, s)
+                for i, s in indexed
+                if self._chunks[i].source_id != exclude_source_id
+            ]
         indexed.sort(key=lambda x: -x[1])
         top = indexed[:top_k]
 

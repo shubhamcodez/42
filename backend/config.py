@@ -68,3 +68,11 @@ def chats_dir() -> Path:
             if d.is_dir() or not d.exists():
                 return d
     return _ROOT / "chats"
+
+
+def chroma_dir() -> Path:
+    """Persistent Chroma DB directory for cross-chat semantic memory (RAG)."""
+    custom = os.environ.get("JARVIS_CHROMA_PATH", "").strip().strip('"')
+    if custom:
+        return Path(custom)
+    return _ROOT / "jarvis-chroma"

@@ -18,6 +18,9 @@ dist/
 
 # Chat conversation logs
 chats/
+
+# Chroma vector DB (local RAG)
+jarvis-chroma/
 venv/
 
 # Shell agent default workdir (host commands)

@@ -58,6 +58,7 @@ async def _chat_node(state: RouterState) -> RouterState:
                 task_state=task_state,
                 top_k=10,
                 include_raw_top_n=3,
+                exclude_chat_id=chat_id or None,
             )
     except Exception:
         pass

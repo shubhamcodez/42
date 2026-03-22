@@ -13,15 +13,20 @@ from .retrieval import run_retrieval_pipeline
 from .schemas import Chunk, SearchResult, WorkingState
 from .vector_store import VectorStore
 
-# Single in-memory store for retrieval; populate via ingest or write-back
+# Persistent Chroma by default; in-memory fallback if chromadb unavailable
 _memory_store: VectorStore | None = None
 
 
 def get_memory_store() -> VectorStore:
-    """Return the global vector store for memory retrieval (lazy init)."""
+    """Return the global vector store for memory retrieval (lazy init). Prefers Chroma on disk."""
     global _memory_store
     if _memory_store is None:
-        _memory_store = VectorStore()
+        try:
+            from .chroma_memory import ChromaChatMemory
+
+            _memory_store = ChromaChatMemory()
+        except Exception:
+            _memory_store = VectorStore()
     return _memory_store
 
 

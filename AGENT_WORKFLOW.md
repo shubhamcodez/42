@@ -132,7 +132,7 @@ Again, **on_step** is the same callback; the backend sends these steps over the 
   1. Emit **on_step(0, …)** with a short plan (interpret task → generate code → run in sandbox).  
   2. **LLM** outputs JSON `{"code": "..."}` using sandbox-allowed imports (stdlib + **numpy, pandas, matplotlib, yfinance**, etc.; see `backend/SANDBOX.md`). **`MPLBACKEND=Agg`** is set for headless matplotlib.  
   3. **run_sandboxed_python** in a child process (~**45s** timeout for slow network); on failure, one **retry** with the error returned to the LLM.  
-  4. Further **on_step** calls for execute/done; final reply includes stdout; **tool_used** may record `python_sandbox`.  
+  4. Further **on_step** calls for execute/done; final reply includes stdout (text in fenced blocks; **PNG/JPEG lines** or `JARVIS_IMAGE_PNG:…` become inline Markdown images in the UI). **tool_used** may record `python_sandbox`.  
 - **No GUI** — does not use pyautogui or desktop automation for script tasks. For **market data + prose** without custom code, use the **finance** agent instead.
 
 ---

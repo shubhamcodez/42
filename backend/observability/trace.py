@@ -11,6 +11,12 @@ from typing import Any, Optional
 
 from .config import TRACES_DIR, ensure_dirs
 
+try:
+    from tools.sandbox_markdown import redact_markdown_chart_embeds
+except ImportError:
+    def redact_markdown_chart_embeds(text: str) -> str:
+        return text or ""
+
 TRACE_FILE = "trace.jsonl"
 _MAX_LINE = 100_000  # cap lines per file, then rotate
 
@@ -58,7 +64,7 @@ def trace_log(
         "provider": provider,
         "route": route,
         "message": (message or "")[:2000],
-        "reply": (reply or "")[:4000],
+        "reply": redact_markdown_chart_embeds(reply or "")[:4000],
         "success": success,
         "error": error,
         "duration_sec": duration_sec,

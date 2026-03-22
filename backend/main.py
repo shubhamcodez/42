@@ -56,6 +56,7 @@ from observability.optimize import run_optimization_step, get_latest_optimizatio
 from observability.human_eval import run_human_eval_benchmark
 from tools import get_weather, try_weather_tool
 from tools.python_sandbox import run_sandboxed_python
+from tools.sandbox_markdown import redact_sandbox_result_dict
 from tools.shell_runner import is_shell_enabled, run_shell_command
 
 app = FastAPI(title="JARVIS API")
@@ -381,11 +382,14 @@ async def send_message_stream(body: SendMessageRequest):
             store = get_memory_store()
             if len(store) > 0:
                 sys_content, _ = run_retrieval_pipeline(
-                    store, get_openai_api_key(),
+                    store,
+                    get_openai_api_key(),
                     current_message=message,
                     recent_turns=hist or [],
                     task_state={"route": "chat"},
-                    top_k=10, include_raw_top_n=3,
+                    top_k=10,
+                    include_raw_top_n=3,
+                    exclude_chat_id=chat_id or None,
                 )
                 sys_content = (sys_content or "").strip() or None
         except Exception:
@@ -637,6 +641,15 @@ async def send_message_stream(body: SendMessageRequest):
 @app.post("/chat/append")
 async def api_append_chat_log(body: AppendChatLogRequest):
     append_chat_log(body.role, body.content)
+    # Re-index current chat into Chroma after each assistant turn (RAG across past chats).
+    if body.role == "assistant":
+        cid = get_current_chat_id()
+        if cid:
+            try:
+                key = get_openai_api_key()
+                await asyncio.to_thread(ingest_chat, get_memory_store(), key, cid)
+            except Exception:
+                pass
     return {}
 
 
@@ -682,14 +695,35 @@ class IngestChatRequest(BaseModel):
 
 @app.post("/memory/ingest")
 async def api_memory_ingest(body: IngestChatRequest):
-    """Ingest a chat's history into the vector store for retrieval. Requires OPENAI_API_KEY."""
+    """Ingest a chat's history into Chroma for cross-chat retrieval. Requires OPENAI_API_KEY."""
     try:
         api_key = get_openai_api_key()
     except Exception as e:
         return {"ok": False, "error": str(e), "chunks_added": 0}
     store = get_memory_store()
-    n = ingest_chat(store, api_key, body.chat_id)
+    n = await asyncio.to_thread(ingest_chat, store, api_key, body.chat_id)
     return {"ok": True, "chunks_added": n}
+
+
+@app.post("/memory/reindex-all")
+async def api_memory_reindex_all():
+    """Embed every chat in the chats folder into Chroma (bootstrap or repair). Requires OPENAI_API_KEY."""
+    try:
+        api_key = get_openai_api_key()
+    except Exception as e:
+        return {"ok": False, "error": str(e), "chats_processed": 0, "chunks_added": 0}
+    store = get_memory_store()
+    entries = list_chats()
+    total_chunks = 0
+
+    def _run():
+        n = 0
+        for e in entries:
+            n += ingest_chat(store, api_key, e["id"])
+        return n
+
+    total_chunks = await asyncio.to_thread(_run)
+    return {"ok": True, "chats_processed": len(entries), "chunks_added": total_chunks}
 
 
 # --- Storage ---
@@ -831,6 +865,8 @@ async def api_tools_python_sandbox(body: PythonSandboxRequest):
     For agents/models: prefer this over exec on the server process.
     """
     result = await asyncio.to_thread(run_sandboxed_python, body.code, body.timeout_sec)
+    if isinstance(result, dict):
+        return redact_sandbox_result_dict(result)
     return result
 
 

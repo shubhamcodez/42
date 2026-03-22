@@ -16,9 +16,52 @@ import {
   setModelSetting,
   agentStepsWsUrl,
 } from './api'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import './App.css'
+
+/** Embedded charts from the coding agent sandbox use data:image/... URLs. */
+function markdownUrlTransform(url) {
+  if (typeof url === 'string' && url.startsWith('data:image/')) return url
+  return defaultUrlTransform(url)
+}
+
+/** Hide sandbox chart lines in tool JSON, step timeline, and old chat logs. */
+function redactImagePayloadsInText(text) {
+  if (!text || typeof text !== 'string') return text
+  return text
+    .split('\n')
+    .map((line) => {
+      const t = line.trim()
+      if (/^JARVIS_IMAGE_(PNG|JPE?G|GIF|WEBP):/i.test(t)) return '[chart image hidden]'
+      if (t.length > 200 && /^[A-Za-z0-9+/=]+$/.test(t) && t.startsWith('iVBOR')) return '[chart image hidden]'
+      if (t.length > 200 && /^[A-Za-z0-9+/=]+$/.test(t) && t.startsWith('/9j')) return '[chart image hidden]'
+      return line
+    })
+    .join('\n')
+}
+
+function formatToolCardResult(raw) {
+  const s = String(raw ?? '')
+  try {
+    const o = JSON.parse(s)
+    if (o && typeof o === 'object' && typeof o.stdout === 'string') {
+      return JSON.stringify({ ...o, stdout: redactImagePayloadsInText(o.stdout) }, null, 2)
+    }
+    return JSON.stringify(o, null, 2)
+  } catch {
+    return redactImagePayloadsInText(s)
+  }
+}
+
+/** Copy assistant text without embedding multi‑MB base64 images. */
+function stripChartDataUrlsForCopy(md) {
+  if (!md || typeof md !== 'string') return md
+  return md.replace(
+    /!\[[^\]]*]\(data:image\/[^)]+\)/g,
+    '![chart]([image omitted — see above])',
+  )
+}
 
 const CHAT_ICON = (
   <svg className="chat-history-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -43,15 +86,16 @@ function CopyResponseButton({ text }) {
   const [copied, setCopied] = useState(false)
   const plain = typeof text === 'string' ? text : String(text ?? '')
   const handleCopy = async () => {
-    if (!plain.trim()) return
+    const toCopy = stripChartDataUrlsForCopy(plain)
+    if (!toCopy.trim()) return
     try {
-      await navigator.clipboard.writeText(plain)
+      await navigator.clipboard.writeText(toCopy)
       setCopied(true)
       window.setTimeout(() => setCopied(false), 2000)
     } catch {
       try {
         const ta = document.createElement('textarea')
-        ta.value = plain
+        ta.value = toCopy
         ta.setAttribute('readonly', '')
         ta.style.position = 'fixed'
         ta.style.left = '-9999px'
@@ -72,7 +116,7 @@ function CopyResponseButton({ text }) {
         type="button"
         className={`msg-copy-btn${copied ? ' msg-copy-btn--done' : ''}`}
         onClick={handleCopy}
-        disabled={!plain.trim()}
+        disabled={!stripChartDataUrlsForCopy(plain).trim()}
         aria-label={copied ? 'Copied to clipboard' : 'Copy response to clipboard'}
       >
         {COPY_ICON}
@@ -523,7 +567,7 @@ function App() {
                           <span className="msg-tool-label">
                             🔧 {name}{input ? ` (${input})` : ''}
                           </span>
-                          <div className="msg-tool-result">{result}</div>
+                          <div className="msg-tool-result">{formatToolCardResult(result)}</div>
                         </div>
                       )
                     } catch {
@@ -533,7 +577,9 @@ function App() {
                 ) : (
                   <div className="msg-bot-body">
                     <div className="msg-markdown">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={markdownUrlTransform}>
+                        {msg.content}
+                      </ReactMarkdown>
                     </div>
                     <CopyResponseButton text={msg.content} />
                   </div>
@@ -574,7 +620,9 @@ function App() {
                 {liveReply ? (
                   <div className="msg-bot-body msg-stream-reply-body">
                     <div className="msg-markdown stream-reply-md">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{liveReply}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={markdownUrlTransform}>
+                      {liveReply}
+                    </ReactMarkdown>
                     </div>
                     <CopyResponseButton text={liveReply} />
                   </div>

@@ -1,12 +1,12 @@
 {
   "trace_stats": {
     "openai": {
-      "success_rate": 0.9166666666666666,
-      "total_runs": 12,
-      "token_input_total": 676,
-      "token_output_total": 25265,
+      "success_rate": 0.9230769230769231,
+      "total_runs": 13,
+      "token_input_total": 685,
+      "token_output_total": 46875,
       "error_count": 1,
-      "avg_duration_sec": 6.286950475000292
+      "avg_duration_sec": 6.224299161538791
     }
   },
   "eval_pass_at_1": {},
@@ -14,30 +14,35 @@
   "prompt_modification_instructions": [
     {
       "target": "supervisor",
-      "instruction": "Add: If the user asks to perform a GUI/browser action (for example: open a new tab, click, scroll, type into an app), route to the desktop agent instead of chat unless the user is clearly asking only for instructions.",
-      "reason": "A failed run shows the supervisor/chat path likely mishandled a direct browser-action request."
+      "instruction": "Add: If the user asks to perform a GUI/browser action such as opening a new tab, clicking, typing, navigating, or interacting with an app, route to the desktop agent instead of chat.",
+      "reason": "A failed run handled the GUI request 'Can you open a new tab' on the chat route, indicating routing confusion."
+    },
+    {
+      "target": "supervisor",
+      "instruction": "Add: If a request is a terse imperative that implies desktop control but omits application context, prefer desktop when the action is generic and reversible (for example opening a new tab with Ctrl/Cmd+T), and ask a clarification only if the action depends on an unknown target app or risks side effects.",
+      "reason": "The sample failure suggests short action commands are being under-routed to chat rather than executed through desktop automation."
     },
     {
       "target": "chat",
-      "instruction": "Add: If the user request implies taking action on the user's device or applications, do not answer as plain chat; explicitly state that this requires the desktop or shell route and hand off when available.",
-      "reason": "The error came from a chat-routed request that expected an action, not a conversational reply."
+      "instruction": "Add: Never claim to perform UI actions. If the supervisor routed a GUI-action request to chat by mistake, explicitly state that opening tabs/windows requires the desktop agent and ask the user whether to proceed with desktop control.",
+      "reason": "The failed chat run returned an empty reply for an actionable desktop request, so chat needs a safe fallback behavior."
     }
   ],
   "code_addition_suggestions": [
     {
       "file": "backend/agents/supervisor.py",
-      "suggestion": "Add an intent-routing rule before LLM dispatch: if the message contains action verbs plus UI targets (e.g. /\\b(open|click|scroll|type|press)\\b/ with terms like tab, browser, window, app, file), force route='desktop'; if it mentions terminal/command/bash, prefer shell.",
-      "reason": "A simple deterministic guard would likely prevent obvious misroutes like 'open a new tab' going to chat."
+      "suggestion": "Add a lightweight intent classifier before final routing that checks for desktop-action verbs and UI nouns (e.g. open/close/click/type/scroll/press/tab/window/browser/app) and boosts the desktop route when matched; include a special case for 'new tab' to route directly to desktop.",
+      "reason": "The only observed failure is a clear desktop command being sent to chat, which a simple heuristic could catch reliably."
     },
     {
       "file": "backend/agents/chat_agent.py",
-      "suggestion": "Add a pre-response classifier/guard that detects device-action requests; instead of generating a normal chat reply, return a structured signal such as {\"handoff\":\"desktop\",\"reason\":\"ui_action_requested\"} or a clear fallback message if handoff is unsupported.",
-      "reason": "This reduces silent failures when chat receives an operational request it cannot execute."
+      "suggestion": "Add a guard clause that detects probable GUI-action requests; instead of generating a normal chat reply, return a structured handoff signal or message like 'This requires desktop control' so the supervisor can reroute or the user can confirm.",
+      "reason": "This prevents silent or empty chat failures when desktop-capable requests are misrouted."
     },
     {
-      "file": "backend/agents/router_logging.py",
-      "suggestion": "Log selected route, confidence, and a normalized intent label for every run, and flag cases where chat receives imperative UI-action language for review.",
-      "reason": "Current trace data is sparse, and richer routing telemetry is needed to confirm and fix misclassification patterns."
+      "file": "backend/agents/desktop_agent.py",
+      "suggestion": "Add support for generic browser/tab shortcuts as first-class actions, including mapping 'open a new tab' to Ctrl+T on Windows/Linux and Cmd+T on macOS, with a brief active-window sanity check before sending the hotkey.",
+      "reason": "Even after routing is fixed, common commands like opening a tab should execute deterministically without needing complex visual grounding."
     }
   ]
 }

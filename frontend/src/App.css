@@ -475,6 +475,17 @@
 .msg-markdown a:hover {
   text-decoration: underline;
 }
+
+.msg-markdown img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0.5rem 0;
+  border-radius: 8px;
+  border: 1px solid #30363d;
+  background: #0d1117;
+}
+
 .msg-markdown h1, .msg-markdown h2, .msg-markdown h3 {
   margin: 0.75rem 0 0.35rem;
   font-weight: 600;

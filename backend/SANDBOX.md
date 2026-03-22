@@ -9,6 +9,31 @@ The coding agent runs model-generated Python in a **child process** with a **tim
 
 `tools/python_sandbox.py` sets `MPLBACKEND=Agg` so plots do not require a display.
 
+## Charts in the chat UI
+
+Print **one line per figure** (no line breaks inside the base64):
+
+```text
+JARVIS_IMAGE_PNG:<base64>
+```
+
+Example:
+
+```python
+import base64, io
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+buf = io.BytesIO()
+plt.plot([1, 2, 3])
+plt.savefig(buf, format="png")
+print("JARVIS_IMAGE_PNG:" + base64.b64encode(buf.getvalue()).decode())
+```
+
+The coding agent turns that into a Markdown image so the frontend renders it. A **single stdout line** that is raw PNG base64 (`iVBOR…`) is also detected.
+
+**Logs & tool cards:** `stdout` in `tool_used`, WebSocket step payloads, retry prompts, and `POST /tools/python-sandbox` responses use **redacted** stdout (chart lines replaced with `[chart image hidden]`) so JSON isn’t huge. The assistant **reply** still contains rendered images.
+
 ## Security
 
 This is **not** a cryptographic sandbox. Allowing **HTTP** (yfinance / requests) means outbound network access from the worker. Do not expose to untrusted users without extra isolation (VM/container).
