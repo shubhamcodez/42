@@ -36,8 +36,8 @@ def retrieve(
 
 def format_retrieved_for_prompt(
     results: List[SearchResult],
-    include_raw_top_n: int = 3,
-    max_raw_chars: int = 2000,
+    include_raw_top_n: int = 4,
+    max_raw_chars: int = 4500,
 ) -> str:
     """
     Build the string to inject into the model context:
@@ -71,8 +71,9 @@ def run_retrieval_pipeline(
     active_file: Optional[str] = None,
     topic_or_entities: Optional[List[str]] = None,
     top_k: int = 10,
-    include_raw_top_n: int = 3,
+    include_raw_top_n: int = 4,
     min_score: Optional[float] = 0.2,
+    max_memory_raw_chars: int = 4500,
 ) -> tuple[str, List[SearchResult]]:
     """
     Full pipeline: build query from context → vector search → format for prompt.
@@ -92,5 +93,9 @@ def run_retrieval_pipeline(
         top_k=top_k,
         min_score=min_score,
     )
-    context_str = format_retrieved_for_prompt(results, include_raw_top_n=include_raw_top_n)
+    context_str = format_retrieved_for_prompt(
+        results,
+        include_raw_top_n=include_raw_top_n,
+        max_raw_chars=max_memory_raw_chars,
+    )
     return context_str, results

@@ -66,7 +66,7 @@ def _run_post_turn_sync() -> None:
     do_eval = False
     do_opt = False
     with _lock:
-        if _env_bool("JARVIS_AUTO_EVAL_GEN", True) and (now - _last_eval_gen >= eval_cd):
+        if _env_bool("JARVIS_AUTO_EVAL_GEN", False) and (now - _last_eval_gen >= eval_cd):
             _last_eval_gen = now
             do_eval = True
         if _env_bool("JARVIS_AUTO_OPTIMIZATION_SUGGESTIONS", True) and (now - _last_opt >= opt_cd):

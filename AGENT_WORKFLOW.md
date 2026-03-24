@@ -175,24 +175,26 @@ Again, **on_step** is the same callback; the backend sends these steps over the 
 ## 8. Tracing and observability
 
 - After the graph finishes (both stream and non-stream), the backend calls **trace_log(provider, route, message, reply, success, error, duration_sec, …)**.  
-- **route** is the state’s **route** set by the node that ran (chat, run_desktop, run_coding, run_shell, run_finance).  
-- Traces are appended to **jarvis-observability/traces/trace.jsonl** and used later for eval generation and optimization (per-model success rates, tokens, errors).
+- **route** is the state’s **route** set by the node that ran (chat, run_desktop, run_coding, run_shell, run_finance), or **feedback_assess** when the user sends a short “this reply was bad” message (see §9).  
+- Traces are appended to **jarvis-observability/traces/trace.jsonl** and used later for optional eval generation and optimization (per-model success rates, tokens, errors).
 
 ---
 
 ## 9. Self-improving loop (evals → prompts & code)
 
-The agent gets better over time by turning **traces** and **eval results** into concrete changes:
+**User-triggered review (primary “what went wrong?” path)** — When the user sends a short complaint in an existing chat (e.g. “I don’t like this response”, “doesn’t look right”), the frontend has already appended that line to the chat log. The backend **short-circuits** normal routing: it loads history **excluding** the complaint, takes the last user→assistant pair as the turn under review, optionally re-runs the **same user message** on the **other** provider (single turn, no history), and asks an LLM (prefers OpenAI) for diagnosis and **actionable fixes** (not only prompt tweaks—calculations, tools, routing, etc.). The reply streams like a normal assistant message; traces use **route `feedback_assess`**. For manual calls: POST `/observability/feedback-assess` with `{ "chat_id": "..." }`.
 
-1. **Trace** — Every chat/agent run is logged (see §9).  
-2. **Generate evals** — POST `/observability/evals/generate`: an LLM turns recent traces into multi-turn eval cases; stored in `jarvis-observability/evals/eval_cases.jsonl`.  
+**Batch evals from traces (optional)** — The agent can also improve using **traces** and **batch eval results**:
+
+1. **Trace** — Every chat/agent run is logged (see §8).  
+2. **Generate evals** — POST `/observability/evals/generate`: an LLM turns recent traces into multi-turn eval cases; stored in `jarvis-observability/evals/eval_cases.jsonl`. Background generation from traces is **off by default**; set `JARVIS_AUTO_EVAL_GEN=1` to re-enable on a cooldown.  
 3. **Run evals** — POST `/observability/evals/run`: each case is run with **both** OpenAI and xAI; optional LLM judge scores replies; results in `eval_runs.jsonl`, pass@1 per model.  
 4. **Optimization** — POST `/observability/optimization/run`: aggregates trace stats + eval pass rates, then calls an LLM to produce:
    - **prompt_modification_instructions** (target: supervisor | desktop | coding | shell | finance | chat; what to add/change and why),
    - **code_addition_suggestions** (file, suggestion, reason).  
 5. **Apply** — You (or automation) edit prompts/code from those instructions; the next runs and evals reflect the improvement.
 
-So: **traces → evals → scores → optimization → prompt/code suggestions → apply → better agents**.
+So: **complaint → feedback_assess (per chat)**; optionally **traces → evals → scores → optimization → apply → better agents**.
 
 ---
 
@@ -229,6 +231,8 @@ User sends message (frontend)
         ↓
 POST /chat/send-message/stream  (or /chat/send-message)
         ↓
+[Stream path] chat_id + complaint phrase? → feedback_assess (stream) → done
+        ↓
 [Stream path] Empty message + attachments? → Stream chat reply → done
 [Stream path] Empty message? → Stream "Hello." reply → done
         ↓
@@ -253,9 +257,11 @@ trace_log(provider, route, message, reply, ...)
 Stream: yield { done: true, reply }  |  Non-stream: return { reply }
 ```
 
-**Self-improving loop (evals)**
+**Self-improving loop (evals + optional batch)**
 
 ```
+User complaint in chat  →  feedback_assess  →  diagnosis + alternate-model comparison
+        (optional)
 trace.jsonl (every run)
         ↓
 POST /observability/evals/generate  →  eval_cases.jsonl (multi-turn cases from logs)

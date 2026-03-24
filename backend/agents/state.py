@@ -19,3 +19,4 @@ class RouterState(TypedDict, total=False):
     reply: str
     on_step: Optional[object]  # optional callback for agent step streaming
     tool_used: Optional[dict]  # when chat used a tool: {"name", "input", "result"}
+    web_search_query: Optional[str]  # optional query from UI (+ globe); also parsed from message in tools

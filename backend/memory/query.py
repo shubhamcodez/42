@@ -33,7 +33,7 @@ def build_retrieval_query(
             role = (t.get("role") or "user").strip().lower()
             content = (t.get("content") or "").strip()
             if content:
-                parts.append(f"Recent ({role}): {content[:500]}")
+                parts.append(f"Recent ({role}): {content[:1500]}")
 
     if task_state:
         goal = (task_state.get("goal") or "").strip()

@@ -54,14 +54,18 @@ async def _chat_node(state: RouterState) -> RouterState:
                 current_message=message,
                 recent_turns=recent_turns,
                 task_state=task_state,
-                top_k=10,
-                include_raw_top_n=3,
+                top_k=12,
+                include_raw_top_n=4,
+                max_memory_raw_chars=4500,
             )
     except Exception:
         pass
 
     # Tool calls: every turn has conversation; then run applicable tools (weather, etc.) and inject results
-    tool_system, tool_used = run_tools_for_turn(message or "", recent_turns=recent_turns or [])
+    wq = (state.get("web_search_query") or "").strip() or None
+    tool_system, tool_used = run_tools_for_turn(
+        message or "", recent_turns=recent_turns or [], web_search_query=wq
+    )
     if tool_system:
         memory_context = (memory_context or "") + "\n\n" + tool_system
 
@@ -94,21 +98,26 @@ def _emit_supervisor_step(state: RouterState) -> None:
 
 async def _run_desktop_node(state: RouterState) -> RouterState:
     from .desktop_agent import run_desktop_agent
+    from tools.web_search import augment_goal_with_web_search
 
     _emit_supervisor_step(state)
-    goal = state.get("goal") or ""
+    goal, ws_tool = augment_goal_with_web_search(dict(state))
     on_step = state.get("on_step")
     api_key = state["api_key"]
     provider = state.get("provider") or "openai"
     reply = await asyncio.to_thread(run_desktop_agent, goal, 10, on_step, api_key=api_key, provider=provider)
-    return {"reply": reply, "route": "run_desktop"}
+    out: RouterState = {"reply": reply, "route": "run_desktop"}
+    if ws_tool:
+        out["tool_used"] = ws_tool
+    return out
 
 
 async def _run_coding_node(state: RouterState) -> RouterState:
     from .coding_agent import run_coding_agent
+    from tools.web_search import augment_goal_with_web_search
 
     _emit_supervisor_step(state)
-    goal = state.get("goal") or ""
+    goal, ws_tool = augment_goal_with_web_search(dict(state))
     on_step = state.get("on_step")
     api_key = state["api_key"]
     provider = state.get("provider") or "openai"
@@ -118,14 +127,17 @@ async def _run_coding_node(state: RouterState) -> RouterState:
     out: RouterState = {"reply": reply, "route": "run_coding"}
     if tool_used:
         out["tool_used"] = tool_used
+    elif ws_tool:
+        out["tool_used"] = ws_tool
     return out
 
 
 async def _run_shell_node(state: RouterState) -> RouterState:
     from .shell_agent import run_shell_agent
+    from tools.web_search import augment_goal_with_web_search
 
     _emit_supervisor_step(state)
-    goal = state.get("goal") or ""
+    goal, ws_tool = augment_goal_with_web_search(dict(state))
     on_step = state.get("on_step")
     api_key = state["api_key"]
     provider = state.get("provider") or "openai"
@@ -135,14 +147,17 @@ async def _run_shell_node(state: RouterState) -> RouterState:
     out: RouterState = {"reply": reply, "route": "run_shell"}
     if tool_used:
         out["tool_used"] = tool_used
+    elif ws_tool:
+        out["tool_used"] = ws_tool
     return out
 
 
 async def _run_finance_node(state: RouterState) -> RouterState:
     from .finance_agent import run_finance_agent
+    from tools.web_search import augment_goal_with_web_search
 
     _emit_supervisor_step(state)
-    goal = state.get("goal") or ""
+    goal, ws_tool = augment_goal_with_web_search(dict(state))
     on_step = state.get("on_step")
     api_key = state["api_key"]
     provider = state.get("provider") or "openai"
@@ -152,6 +167,8 @@ async def _run_finance_node(state: RouterState) -> RouterState:
     out: RouterState = {"reply": reply, "route": "run_finance"}
     if tool_used:
         out["tool_used"] = tool_used
+    elif ws_tool:
+        out["tool_used"] = ws_tool
     return out
 
 

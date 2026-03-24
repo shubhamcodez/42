@@ -19,21 +19,26 @@ async function request(path, options = {}) {
   return res.json();
 }
 
-export async function chatbotResponse(message, attachmentPaths = null) {
+export async function chatbotResponse(message, attachmentPaths = null, webSearchQuery = null) {
   const { reply } = await request('/chat/response', {
     method: 'POST',
-    body: JSON.stringify({ message: message || '', attachment_paths: attachmentPaths }),
+    body: JSON.stringify({
+      message: message || '',
+      attachment_paths: attachmentPaths,
+      web_search_query: webSearchQuery || null,
+    }),
   });
   return reply;
 }
 
-export async function sendMessage(message, attachmentPaths = null, chatId = null) {
+export async function sendMessage(message, attachmentPaths = null, chatId = null, webSearchQuery = null) {
   const { reply } = await request('/chat/send-message', {
     method: 'POST',
     body: JSON.stringify({
       message: message || '',
       attachment_paths: attachmentPaths,
       chat_id: chatId,
+      web_search_query: webSearchQuery || null,
     }),
   });
   return reply;
@@ -49,7 +54,7 @@ export async function sendMessageStream(
   message,
   attachmentPaths,
   chatId,
-  { onChunk, onDone, onToolUsed, onStatus, onAgentStep }
+  { onChunk, onDone, onToolUsed, onStatus, onAgentStep, webSearchQuery = null }
 ) {
   const base = import.meta.env.VITE_API_URL || '/api'
   const res = await fetch(base + '/chat/send-message/stream', {
@@ -59,6 +64,7 @@ export async function sendMessageStream(
       message: message || '',
       attachment_paths: attachmentPaths || null,
       chat_id: chatId || null,
+      web_search_query: webSearchQuery || null,
     }),
   })
   if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`)
@@ -107,10 +113,11 @@ export async function sendMessageStream(
 }
 
 /** Send message with file uploads (multipart). Use when user attached files. */
-export async function sendMessageWithFiles(message, files = [], chatId = null) {
+export async function sendMessageWithFiles(message, files = [], chatId = null, webSearchQuery = null) {
   const form = new FormData();
   form.append('message', message || '');
   form.append('chat_id', chatId ?? '');
+  if (webSearchQuery) form.append('web_search_query', webSearchQuery);
   for (const f of files) {
     form.append('files', f);
   }

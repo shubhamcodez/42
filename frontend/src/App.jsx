@@ -54,6 +54,71 @@ function formatToolCardResult(raw) {
   }
 }
 
+const TOOL_PREVIEW_MAX_CHARS = 180
+
+function truncateToolPreview(text, maxChars = TOOL_PREVIEW_MAX_CHARS) {
+  const s = String(text)
+  if (s.length <= maxChars) return s
+  const cut = s.slice(0, maxChars)
+  const lastNl = cut.lastIndexOf('\n')
+  if (lastNl > 48) return `${cut.slice(0, lastNl).trimEnd()}…`
+  const sp = cut.lastIndexOf(' ')
+  return `${(sp > 56 ? cut.slice(0, sp) : cut).trimEnd()}…`
+}
+
+function ToolMessageCard({ content }) {
+  const [expanded, setExpanded] = useState(false)
+  try {
+    const t = typeof content === 'string' ? JSON.parse(content) : content
+    const name = t?.name || 'tool'
+    const input = t?.input ?? ''
+    const result = t?.result ?? ''
+    const formatted = formatToolCardResult(result)
+    const collapsible =
+      name === 'web_search' ||
+      (typeof formatted === 'string' && formatted.length > 1400)
+
+    if (!collapsible) {
+      return (
+        <div className="msg-tool-card">
+          <div className="msg-tool-title-row">
+            <span className="msg-tool-label">
+              🔧 {name}
+              {input !== '' && input != null ? ` (${input})` : ''}
+            </span>
+          </div>
+          <div className="msg-tool-result msg-tool-result--body">{formatted}</div>
+        </div>
+      )
+    }
+
+    const showFull = expanded
+    const body = showFull ? formatted : truncateToolPreview(formatted)
+
+    return (
+      <div className={`msg-tool-card${showFull ? ' msg-tool-card--expanded' : ' msg-tool-card--collapsed'}`}>
+        <div className="msg-tool-title-row">
+          <span className="msg-tool-label msg-tool-label--grow" title={input ? String(input) : undefined}>
+            🔧 {name}
+            {input !== '' && input != null ? ` (${input})` : ''}
+          </span>
+          <button
+            type="button"
+            className="msg-tool-toggle"
+            onClick={() => setExpanded((e) => !e)}
+            aria-expanded={showFull}
+          >
+            {showFull ? 'Collapse' : 'View full'}
+          </button>
+        </div>
+        <div className="msg-tool-result msg-tool-result--body">{body}</div>
+      </div>
+    )
+  } catch {
+    return <span className="msg-text">{content}</span>
+  }
+}
+
 /** Copy assistant text without embedding multi‑MB base64 images. */
 function stripChartDataUrlsForCopy(md) {
   if (!md || typeof md !== 'string') return md
@@ -79,6 +144,19 @@ const COPY_ICON = (
   <svg className="msg-copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
     <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </svg>
+)
+
+const CLIP_MENU_ICON = (
+  <svg className="chat-add-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+    <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+  </svg>
+)
+
+const GLOBE_MENU_ICON = (
+  <svg className="chat-add-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+    <circle cx="12" cy="12" r="10" />
+    <path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" />
   </svg>
 )
 
@@ -143,6 +221,15 @@ function App() {
   const wsRef = useRef(null)
   const messagesEndRef = useRef(null)
   const fileInputRef = useRef(null)
+  const addMenuRef = useRef(null)
+  const [addMenuOpen, setAddMenuOpen] = useState(false)
+  const [webSearchMode, setWebSearchMode] = useState(() => {
+    try {
+      return sessionStorage.getItem('jarvis-web-search-mode') === '1'
+    } catch {
+      return false
+    }
+  })
 
   const refreshChatList = useCallback(async () => {
     try {
@@ -206,6 +293,15 @@ function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streamTimeline])
+
+  useEffect(() => {
+    if (!addMenuOpen) return
+    const onDown = (e) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target)) setAddMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [addMenuOpen])
 
   useEffect(() => {
     const url = agentStepsWsUrl()
@@ -280,20 +376,36 @@ function App() {
     setMessages((prev) => [...prev, { role: 'tool', content: JSON.stringify(toolUsed) }])
   }
 
-  const handleSend = async () => {
+  const toggleWebSearchMode = () => {
+    setWebSearchMode((m) => {
+      const next = !m
+      try {
+        if (next) sessionStorage.setItem('jarvis-web-search-mode', '1')
+        else sessionStorage.removeItem('jarvis-web-search-mode')
+      } catch {
+        /* ignore */
+      }
+      return next
+    })
+    setAddMenuOpen(false)
+  }
+
+  const handleSend = async (opts = {}) => {
     const raw = input.trim()
-    if (!raw && attachments.length === 0) return
-    setInput('')
+    const explicitWs = (opts.webSearchQuery || '').trim()
+    const extraWs =
+      explicitWs || (webSearchMode && raw ? raw : '')
     const filesToSend = [...attachments]
+    if (!raw && filesToSend.length === 0 && !extraWs) return
+    setInput('')
     setAttachments([])
 
-    const displayText =
-      raw ||
-      (filesToSend.length === 1
-        ? filesToSend[0].name
-        : filesToSend.length > 1
-          ? filesToSend.map((f) => f.name).join(', ')
-          : '')
+    let displayText = raw
+    if (filesToSend.length === 1 && !displayText) displayText = filesToSend[0].name
+    else if (filesToSend.length > 1 && !displayText) displayText = filesToSend.map((f) => f.name).join(', ')
+    if (explicitWs && !webSearchMode) {
+      displayText = displayText ? `${displayText} · Web: ${explicitWs}` : `Web search: ${explicitWs}`
+    }
     appendMessage(displayText, true)
     setSending(true)
     setLiveReply('')
@@ -315,7 +427,8 @@ function App() {
         reply = await sendMessageWithFiles(
           raw || 'Please summarize or answer based on the attached documents.',
           filesToSend,
-          chatId
+          chatId,
+          extraWs.trim() || null
         )
         appendMessage(reply, false)
         await appendChatLog('assistant', reply)
@@ -350,11 +463,9 @@ function App() {
           }
         }
 
-        const streamResult = await sendMessageStream(
-          raw || 'Please summarize or answer based on the attached documents.',
-          null,
-          chatId,
-          {
+        const streamMsg = raw || (extraWs ? '' : 'Please summarize or answer based on the attached documents.')
+        const streamResult = await sendMessageStream(streamMsg, null, chatId, {
+            webSearchQuery: extraWs.trim() || null,
             onChunk: (delta) => setLiveReply((prev) => (prev || '') + delta),
             onStatus: (d) => {
               if (d.phase === 'done') return
@@ -381,8 +492,7 @@ function App() {
               const screenshot = d.screenshot || pending || row.screenshot || null
               setStreamTimeline((prev) => [...prev, { ...row, screenshot }])
             },
-          }
-        )
+        })
         reply = streamResult?.reply ?? streamResult ?? ''
         if (streamResult?.tool_used) appendToolMessage(streamResult.tool_used)
         appendMessage(reply || '', false)
@@ -407,7 +517,7 @@ function App() {
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handleSend()
+      handleSend({})
     }
   }
 
@@ -556,24 +666,7 @@ function App() {
                 {msg.role === 'user' ? (
                   <span className="msg-text">{msg.content}</span>
                 ) : msg.role === 'tool' ? (
-                  (() => {
-                    try {
-                      const t = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content
-                      const name = t?.name || 'tool'
-                      const input = t?.input ?? ''
-                      const result = t?.result ?? ''
-                      return (
-                        <div className="msg-tool-card">
-                          <span className="msg-tool-label">
-                            🔧 {name}{input ? ` (${input})` : ''}
-                          </span>
-                          <div className="msg-tool-result">{formatToolCardResult(result)}</div>
-                        </div>
-                      )
-                    } catch {
-                      return <span className="msg-text">{msg.content}</span>
-                    }
-                  })()
+                  <ToolMessageCard content={msg.content} />
                 ) : (
                   <div className="msg-bot-body">
                     <div className="msg-markdown">
@@ -652,26 +745,62 @@ function App() {
               </div>
             )}
             <div className="chat-input-row">
-              <button
-                type="button"
-                id="chat-attach"
-                className="chat-attach-btn"
-                aria-label="Attach files"
-                onClick={handleAttach}
-              >
-                📎
-              </button>
+              <div className="chat-add-wrap" ref={addMenuRef}>
+                <button
+                  type="button"
+                  id="chat-add"
+                  className="chat-add-btn"
+                  aria-label="Add attachment or web search"
+                  aria-expanded={addMenuOpen}
+                  aria-haspopup="menu"
+                  onClick={() => setAddMenuOpen((o) => !o)}
+                >
+                  +
+                </button>
+                {addMenuOpen ? (
+                  <div className="chat-add-menu" role="menu">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="chat-add-menu-item"
+                      onClick={() => {
+                        setAddMenuOpen(false)
+                        handleAttach()
+                      }}
+                    >
+                      {CLIP_MENU_ICON}
+                      <span className="chat-add-menu-label">Attach</span>
+                      <span className="chat-add-menu-hint">files</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={`chat-add-menu-item${webSearchMode ? ' chat-add-menu-item--active' : ''}`}
+                      aria-pressed={webSearchMode}
+                      onClick={toggleWebSearchMode}
+                    >
+                      {GLOBE_MENU_ICON}
+                      <span className="chat-add-menu-label">Web search</span>
+                      <span className="chat-add-menu-hint">{webSearchMode ? 'on' : 'off'}</span>
+                    </button>
+                  </div>
+                ) : null}
+              </div>
               <input type="file" ref={fileInputRef} style={{ display: 'none' }} multiple onChange={onFileChange} />
               <textarea
                 id="chat-input"
-                placeholder="Message JARVIS..."
+                placeholder={
+                  webSearchMode
+                    ? 'Message JARVIS… (each send uses the web: top results inform the reply)'
+                    : 'Message JARVIS…'
+                }
                 rows={1}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 disabled={sending}
               />
-              <button type="button" id="chat-send" onClick={handleSend} disabled={sending}>
+              <button type="button" id="chat-send" onClick={() => handleSend({})} disabled={sending}>
                 Send
               </button>
             </div>

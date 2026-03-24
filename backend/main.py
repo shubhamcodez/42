@@ -57,6 +57,11 @@ from storage import get_chats_storage_path, set_chats_storage_path
 from agents.router import create_router_graph
 from observability.trace import trace_log, list_traces
 from observability.auto_loop import schedule_post_turn_observability
+from observability.feedback_assess import (
+    format_feedback_assessment_markdown,
+    is_feedback_complaint,
+    run_feedback_assessment,
+)
 from observability.eval_gen import generate_evals_from_logs
 from observability.eval_runner import run_evals_for_all_models, pass_at_k
 from observability.evals import load_eval_cases, load_eval_runs
@@ -143,11 +148,13 @@ class SendMessageRequest(BaseModel):
     message: str = ""
     attachment_paths: Optional[list[str]] = None
     chat_id: Optional[str] = None
+    web_search_query: Optional[str] = None
 
 
 class ChatbotResponseRequest(BaseModel):
     message: str = ""
     attachment_paths: Optional[list[str]] = None
+    web_search_query: Optional[str] = None
 
 
 class AppendChatLogRequest(BaseModel):
@@ -156,6 +163,10 @@ class AppendChatLogRequest(BaseModel):
 
 
 class SetCurrentChatRequest(BaseModel):
+    chat_id: str
+
+
+class FeedbackAssessRequest(BaseModel):
     chat_id: str
 
 
@@ -181,6 +192,10 @@ class ShellRunRequest(BaseModel):
     timeout_sec: float | None = None
 
 
+class WebSearchRequest(BaseModel):
+    query: str
+
+
 # --- Chat ---
 @app.post("/chat/response")
 async def chatbot_response(body: ChatbotResponseRequest):
@@ -190,12 +205,25 @@ async def chatbot_response(body: ChatbotResponseRequest):
     client = get_llm_client(provider)
     msg = (body.message or "").strip()
     paths = body.attachment_paths or []
-    trace_msg = msg
+    ws_q = (body.web_search_query or "").strip() or None
     if not msg and paths:
         msg = "Please summarize or answer based on the attached documents."
+    if not msg and ws_q:
+        msg = f"Summarize and answer based on a web search about: {ws_q}"
+    trace_msg = msg
+    reply = ""
+    tool_used = None
     t0 = time.perf_counter()
     try:
-        reply = await asyncio.to_thread(client.chat, api_key, msg, paths if paths else None)
+        from tools.runner import run_tools_for_turn
+
+        tool_sys, tool_used = await asyncio.to_thread(
+            run_tools_for_turn, msg, None, ws_q
+        )
+        system_content = (tool_sys or "").strip() or None
+        reply = await asyncio.to_thread(
+            client.chat, api_key, msg, paths if paths else None, None, system_content
+        )
         trace_log(
             provider=provider,
             route="chat",
@@ -216,7 +244,10 @@ async def chatbot_response(body: ChatbotResponseRequest):
             duration_sec=time.perf_counter() - t0,
         )
         raise
-    return {"reply": reply}
+    out: dict = {"reply": reply}
+    if tool_used:
+        out["tool_used"] = tool_used
+    return out
 
 
 @app.post("/chat/send-message")
@@ -228,7 +259,38 @@ async def send_message(body: SendMessageRequest):
     api_key = get_llm_api_key()
     message = (body.message or "").strip()
     attachment_paths = body.attachment_paths or []
+    ws_q = (body.web_search_query or "").strip()
+    if not message and ws_q:
+        message = f"Summarize and answer based on a web search about: {ws_q}"
     chat_id = body.chat_id
+
+    if chat_id and is_feedback_complaint(message):
+        t_fb = time.perf_counter()
+        try:
+            result = await asyncio.to_thread(run_feedback_assessment, chat_id, provider)
+            reply = format_feedback_assessment_markdown(result)
+            trace_log(
+                provider=provider,
+                route="feedback_assess",
+                message=message,
+                reply=reply[:4000],
+                success=bool(result.get("ok")),
+                error=result.get("error") if not result.get("ok") else None,
+                duration_sec=time.perf_counter() - t_fb,
+            )
+            schedule_post_turn_observability()
+            return {"reply": reply, "tool_used": None}
+        except Exception as e:
+            trace_log(
+                provider=provider,
+                route="feedback_assess",
+                message=message,
+                reply="",
+                success=False,
+                error=str(e),
+                duration_sec=time.perf_counter() - t_fb,
+            )
+            raise
 
     step_queue: queue.Queue = queue.Queue()
 
@@ -261,6 +323,7 @@ async def send_message(body: SendMessageRequest):
         "api_key": api_key,
         "provider": provider,
         "on_step": on_step,
+        "web_search_query": ws_q or None,
     }
     graph = _get_router_graph()
     drain_task = asyncio.create_task(drain_steps())
@@ -311,6 +374,9 @@ async def send_message_stream(body: SendMessageRequest):
     api_key = get_llm_api_key()
     message = (body.message or "").strip()
     attachment_paths = body.attachment_paths or []
+    ws_q = (body.web_search_query or "").strip()
+    if not message and ws_q:
+        message = f"Summarize and answer based on a web search about: {ws_q}"
     chat_id = body.chat_id
     has_attachments = len(attachment_paths) > 0
     client = get_llm_client(provider)
@@ -396,20 +462,64 @@ async def send_message_stream(body: SendMessageRequest):
                     current_message=message,
                     recent_turns=hist or [],
                     task_state={"route": "chat"},
-                    top_k=10, include_raw_top_n=3,
+                    top_k=12,
+                    include_raw_top_n=4,
+                    max_memory_raw_chars=4500,
                 )
                 sys_content = (sys_content or "").strip() or None
         except Exception:
             pass
         # 2) Tool calls: run applicable tools (weather app, etc.) using conversation context; then inject results
         from tools.runner import run_tools_for_turn
-        tool_system, tool_used = run_tools_for_turn(message or "", recent_turns=hist or [])
+        tool_system, tool_used = run_tools_for_turn(
+            message or "", recent_turns=hist or [], web_search_query=ws_q or None
+        )
         if tool_system:
             sys_content = (tool_system + "\n\n" + (sys_content or "")) if sys_content else tool_system
         sys_final = (sys_content.strip() or None) if sys_content else None
         return hist, sys_final, tool_used
 
     async def event_stream():
+        if chat_id and message and is_feedback_complaint(message):
+            t_fb = time.perf_counter()
+            yield _sse_data(
+                {
+                    "type": "status",
+                    "phase": "feedback_assess",
+                    "message": "Reviewing this thread and the alternate model…",
+                }
+            )
+            try:
+                result = await asyncio.to_thread(run_feedback_assessment, chat_id, provider)
+                reply_md = format_feedback_assessment_markdown(result)
+                trace_log(
+                    provider=provider,
+                    route="feedback_assess",
+                    message=message,
+                    reply=reply_md[:4000],
+                    success=bool(result.get("ok")),
+                    error=result.get("error") if not result.get("ok") else None,
+                    duration_sec=time.perf_counter() - t_fb,
+                )
+                schedule_post_turn_observability()
+                yield f"data: {json.dumps({'delta': reply_md})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'reply': reply_md})}\n\n"
+            except Exception as e:
+                err = str(e)
+                trace_log(
+                    provider=provider,
+                    route="feedback_assess",
+                    message=message,
+                    reply="",
+                    success=False,
+                    error=err,
+                    duration_sec=time.perf_counter() - t_fb,
+                )
+                fallback = f"Sorry, feedback review failed: {err}"
+                yield f"data: {json.dumps({'delta': fallback})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'reply': fallback})}\n\n"
+            return
+
         # Attachments-only: go straight to chat stream
         if not message and has_attachments:
             yield _sse_data({"type": "status", "phase": "context", "message": "Loading context and attachments…"})
@@ -530,6 +640,7 @@ async def send_message_stream(body: SendMessageRequest):
             "api_key": api_key,
             "provider": provider,
             "on_step": on_step,
+            "web_search_query": ws_q or None,
         }
         graph = _get_router_graph()
         stream_start = time.perf_counter()
@@ -736,6 +847,26 @@ async def api_get_traces(limit: int = 500):
     return {"traces": list_traces(limit=limit)}
 
 
+@app.post("/observability/feedback-assess")
+async def api_feedback_assess(body: FeedbackAssessRequest):
+    """
+    Run user-triggered quality review for a chat whose last log line is a complaint
+    (same logic as POST /chat/send-message when the message matches complaint heuristics).
+    """
+    provider = get_llm_provider()
+    result = await asyncio.to_thread(run_feedback_assessment, body.chat_id, provider)
+    return {
+        "ok": result.get("ok"),
+        "reply": format_feedback_assessment_markdown(result),
+        "meta": {
+            "selected_provider": result.get("selected_provider"),
+            "alternate_provider": result.get("alternate_provider"),
+            "assessor_provider": result.get("assessor_provider"),
+        },
+        "error": result.get("error"),
+    }
+
+
 @app.post("/observability/evals/generate")
 async def api_generate_evals(num_traces: int = 30, num_cases: int = 5):
     """Generate multi-turn eval cases from recent trace logs (LLM-based)."""
@@ -785,6 +916,7 @@ async def api_human_eval(max_problems: int = 5):
 async def send_message_with_files(
     message: str = Form(""),
     chat_id: Optional[str] = Form(None),
+    web_search_query: Optional[str] = Form(None),
     files: list[UploadFile] = File(default=[]),
 ):
     """Accept multipart form: message + files. Saves files to temp and calls send_message."""
@@ -801,7 +933,12 @@ async def send_message_with_files(
             with open(path, "wb") as out:
                 out.write(await f.read())
             paths.append(path)
-        body = SendMessageRequest(message=message.strip(), attachment_paths=paths if paths else None, chat_id=chat_id)
+        body = SendMessageRequest(
+            message=message.strip(),
+            attachment_paths=paths if paths else None,
+            chat_id=chat_id,
+            web_search_query=(web_search_query or "").strip() or None,
+        )
         result = await send_message(body)
         return result
     finally:
@@ -870,6 +1007,18 @@ async def api_tools_grep(
         fixed_string=not regex,
         ignore_case=not case_sensitive,
     )
+
+
+@app.post("/tools/web-search")
+async def api_tools_web_search(body: WebSearchRequest):
+    """DuckDuckGo text search (no API key). Same engine as chat / agent web_search tool."""
+    from tools.web_search import search_web
+
+    q = (body.query or "").strip()
+    if not q:
+        return {"ok": False, "error": "empty query", "results_text": ""}
+    text = await asyncio.to_thread(search_web, q)
+    return {"ok": True, "query": q, "results_text": text}
 
 
 @app.post("/tools/python-sandbox")

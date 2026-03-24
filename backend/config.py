@@ -24,8 +24,8 @@ _LEGACY_GREP_ROOT_FILE = _REPO_ROOT / "jarvis-grep-root.txt"
 _DEFAULTS: dict[str, Any] = {
     "llm_provider": "openai",
     "chat": {
-        "history_limit": 120,
-        "memory_query_recent_turns": 12,
+        "history_limit": 300,
+        "memory_query_recent_turns": 32,
     },
     "grep": {
         "default_root": None,
@@ -149,20 +149,20 @@ def get_grep_root() -> Path | None:
 
 
 def get_chat_history_limit() -> int:
-    """Max chat log messages sent to the LLM each turn (clamped 1–500)."""
-    v = (_merged_config().get("chat") or {}).get("history_limit", 120)
+    """Max chat log messages sent to the LLM each turn (clamped 1–2000)."""
+    v = (_merged_config().get("chat") or {}).get("history_limit", 300)
     try:
         n = int(v)
-        return max(1, min(n, 500))
+        return max(1, min(n, 2000))
     except (TypeError, ValueError):
-        return 120
+        return 300
 
 
 def get_memory_query_recent_turns() -> int:
-    """Recent messages folded into vector-memory retrieval query (clamped 1–80)."""
-    v = (_merged_config().get("chat") or {}).get("memory_query_recent_turns", 12)
+    """Recent messages folded into vector-memory retrieval query (clamped 1–120)."""
+    v = (_merged_config().get("chat") or {}).get("memory_query_recent_turns", 32)
     try:
         n = int(v)
-        return max(1, min(n, 80))
+        return max(1, min(n, 120))
     except (TypeError, ValueError):
-        return 12
+        return 32
