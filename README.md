@@ -1,4 +1,4 @@
-# Socrates (Formerly JARVIS)
+# 42 is the answer to everything (Formerly JARVIS)
 
 Assistant that can chat, control the **desktop** (screenshot + vision + pyautogui—including your on-screen browser), run **sandboxed Python**, optional **host shell** (opt-in), and **market data / analysis** via **yfinance** (finance agent). Routes via a supervisor LLM; supports OpenAI and xAI (Grok).
 
