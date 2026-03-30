@@ -12,7 +12,7 @@ class RouterState(TypedDict, total=False):
     chat_id: Optional[str]
     api_key: str
     provider: str  # "openai" or "xai"
-    route: str  # "chat" | "run_desktop" | "run_coding" | "run_shell" | "run_finance" | "run_multi_agent"
+    route: str  # "chat" | "run_desktop" | "run_coding" | "run_shell" | "run_finance" | "run_google" | "run_multi_agent"
     classification: dict
     supervisor_decision: dict
     goal: str
@@ -20,3 +20,4 @@ class RouterState(TypedDict, total=False):
     on_step: Optional[object]  # optional callback for agent step streaming
     tool_used: Optional[dict]  # when chat used a tool: {"name", "input", "result"}
     web_search_query: Optional[str]  # optional query from UI (+ globe); also parsed from message in tools
+    google_session_id: Optional[str]  # jarvis_google_sid cookie for Calendar/Gmail agent

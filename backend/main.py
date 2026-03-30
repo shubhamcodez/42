@@ -28,6 +28,7 @@ warnings.filterwarnings(
 
 import json
 
+import httpx
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
@@ -79,11 +80,15 @@ from auth.google_oauth import (
     create_login_url,
     disconnect_session,
     exchange_code_and_create_session,
+    get_valid_access_token_for_session,
     google_status_by_session,
     logout_session,
+    oauth_client_id_hint,
     oauth_missing_config_fields,
     oauth_redirect_uri,
+    oauth_suggested_javascript_origin,
 )
+from integrations.gmail_client import fetch_gmail_profile
 
 app = FastAPI(title="JARVIS API")
 app.add_middleware(
@@ -263,9 +268,9 @@ async def chatbot_response(body: ChatbotResponseRequest):
 
 
 @app.post("/chat/send-message")
-async def send_message(body: SendMessageRequest):
+async def send_message(body: SendMessageRequest, request: Request):
     """
-    Main entry: LangGraph router classifies then routes to chat, desktop, coding (sandbox: numpy/pandas/matplotlib/yfinance), shell (opt-in), or finance (yfetch + prose).
+    Main entry: LangGraph router classifies then routes to chat, desktop, coding (sandbox: numpy/pandas/matplotlib/yfinance), shell (opt-in), finance (yfetch + prose), or google (Calendar/Gmail API).
     """
     provider = get_llm_provider()
     api_key = get_llm_api_key()
@@ -336,6 +341,7 @@ async def send_message(body: SendMessageRequest):
         "provider": provider,
         "on_step": on_step,
         "web_search_query": ws_q or None,
+        "google_session_id": request.cookies.get("jarvis_google_sid"),
     }
     graph = _get_router_graph()
     drain_task = asyncio.create_task(drain_steps())
@@ -378,10 +384,11 @@ async def send_message(body: SendMessageRequest):
 
 
 @app.post("/chat/send-message/stream")
-async def send_message_stream(body: SendMessageRequest):
+async def send_message_stream(body: SendMessageRequest, request: Request):
     """
     Streaming variant: classify first; if chat, stream SSE chunks; else run agent and send one final SSE event.
     """
+    google_session_id = request.cookies.get("jarvis_google_sid")
     provider = get_llm_provider()
     api_key = get_llm_api_key()
     message = (body.message or "").strip()
@@ -580,6 +587,7 @@ async def send_message_stream(body: SendMessageRequest):
             "coding": "coding agent (sandbox)",
             "shell": "shell agent (host)",
             "finance": "finance agent (yfinance)",
+            "google": "Google Workspace agent (Calendar / Gmail)",
         }
         if is_task:
             if len(agents_plan) == 1:
@@ -669,6 +677,7 @@ async def send_message_stream(body: SendMessageRequest):
             "provider": provider,
             "on_step": on_step,
             "web_search_query": ws_q or None,
+            "google_session_id": google_session_id,
         }
         graph = _get_router_graph()
         stream_start = time.perf_counter()
@@ -874,6 +883,8 @@ async def api_google_auth_status(request: Request):
     sid = request.cookies.get("jarvis_google_sid")
     info = google_status_by_session(sid)
     info["redirect_uri"] = oauth_redirect_uri()
+    info["client_id_hint"] = oauth_client_id_hint()
+    info["javascript_origin_hint"] = oauth_suggested_javascript_origin()
     if not info.get("configured"):
         info["missing_fields"] = oauth_missing_config_fields()
     return info
@@ -926,6 +937,39 @@ async def api_google_auth_disconnect(request: Request):
     out = JSONResponse({"ok": True})
     out.delete_cookie("jarvis_google_sid", path="/")
     return out
+
+
+@app.get("/integrations/gmail/profile")
+async def api_gmail_profile(request: Request):
+    """Gmail API profile for the signed-in Google user (uses OAuth token from sign-in)."""
+    sid = request.cookies.get("jarvis_google_sid")
+    token, err = get_valid_access_token_for_session(sid)
+    if not token:
+        return JSONResponse({"ok": False, "error": err or "Unauthorized"}, status_code=401)
+    try:
+        profile = await asyncio.to_thread(fetch_gmail_profile, token)
+        return {
+            "ok": True,
+            "emailAddress": profile.get("emailAddress"),
+            "messagesTotal": profile.get("messagesTotal"),
+            "threadsTotal": profile.get("threadsTotal"),
+        }
+    except httpx.HTTPStatusError as e:
+        detail = ""
+        try:
+            detail = (e.response.text or "")[:400]
+        except Exception:
+            pass
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": f"Gmail API HTTP {e.response.status_code}",
+                "detail": detail,
+            },
+            status_code=502,
+        )
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
 
 
 # --- Observability: traces, evals, optimization (per-model) ---
@@ -1002,6 +1046,7 @@ async def api_human_eval(max_problems: int = 5):
 # --- File upload for attachments (web: frontend sends files as multipart) ---
 @app.post("/chat/send-message-with-files")
 async def send_message_with_files(
+    request: Request,
     message: str = Form(""),
     chat_id: Optional[str] = Form(None),
     web_search_query: Optional[str] = Form(None),
@@ -1027,7 +1072,7 @@ async def send_message_with_files(
             chat_id=chat_id,
             web_search_query=(web_search_query or "").strip() or None,
         )
-        result = await send_message(body)
+        result = await send_message(body, request)
         return result
     finally:
         for p in paths:

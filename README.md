@@ -47,20 +47,32 @@ Optional variables:
 
 - `GOOGLE_OAUTH_REDIRECT_URI` (default: `http://localhost:5173/api/auth/google/callback`)
 - `GOOGLE_OAUTH_FRONTEND_URL` (default: `http://localhost:5173`)
-- `GOOGLE_OAUTH_SCOPES` (default includes openid/email/profile + Calendar + Gmail read scope)
+- `GOOGLE_OAUTH_SCOPES` (default includes Calendar + Gmail modify + send; see `backend/auth/google_oauth.py`)
 - `GOOGLE_OAUTH_STORE_PATH` (default: `.secrets/google-oauth-store.json`)
 - `GOOGLE_OAUTH_COOKIE_SECURE` (`true` for HTTPS-only cookies in production)
 
 Google Cloud setup notes:
 
 1. Create an OAuth **Web application** client (not Desktop).
-2. Add **Authorized redirect URIs** that match what the backend sends (must match **exactly**, including `http` vs `https` and `localhost` vs `127.0.0.1`):
+2. Under **Authorized JavaScript origins**, add the origin of your Vite app (no path), e.g. `http://localhost:5173` (and `http://127.0.0.1:5173` if you use that in the browser).
+3. Add **Authorized redirect URIs** that match what the backend sends (must match **exactly**, including `http` vs `https` and `localhost` vs `127.0.0.1`):
    - Default dev: `http://localhost:5173/api/auth/google/callback`
    - If you open the UI at `127.0.0.1`, also add: `http://127.0.0.1:5173/api/auth/google/callback`
    - Or set `GOOGLE_OAUTH_REDIRECT_URI` to your chosen URL and add that same value in GCP.
-3. Enable Google Calendar API and Gmail API for your project.
-4. For external users, publish the OAuth consent screen.
+4. Confirm the **Client ID** in `.env` is from **this same** OAuth client (same GCP project). The app’s **Settings** page shows a short fingerprint of the Client ID in use.
+5. Enable **Google Calendar API** and **Gmail API** for your project.
+
+### Google Workspace agent (supervisor)
+
+After you **Sign in with Google** in Settings, the **supervisor** can route messages to the **`google`** specialist: it plans Calendar/Gmail API operations (same class of actions as typical Calendar/Gmail MCP tools), runs them with your OAuth token, and summarizes results. Example prompts: “What’s on my calendar this week?”, “List unread Gmail”, “Send an email to …”. Uses the `jarvis_google_sid` cookie from the browser (`fetch` with credentials).
+
+If you change OAuth scopes, **Disconnect** and sign in again.
+6. For external users, publish the OAuth consent screen and add **Test users** while the app is in Testing.
 
 ### Error `redirect_uri_mismatch`
 
 Google rejects the login when the redirect URI in the request is not listed on the Web client. Open **Settings** in the app and use **Copy** next to the redirect URI shown there, then paste it into GCP **Authorized redirect URIs** and save.
+
+### Message: “doesn’t comply with Google’s OAuth 2.0 policy” / “register the redirect URI”
+
+Usually this still means **Google Cloud Console** is not set up for the client ID your backend uses: wrong client type (Desktop vs Web), redirect URI not saved on **that** client, or JavaScript origin missing. Use **Settings** in the app to copy the exact **redirect URI** and verify the **Client ID fingerprint** matches the Web client you edit in [Credentials](https://console.cloud.google.com/apis/credentials). Official overview: [Google OAuth 2.0 policies](https://developers.google.com/identity/protocols/oauth2/policies).

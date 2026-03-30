@@ -315,21 +315,35 @@
   border-color: #58a6ff;
 }
 
-.settings-auth-warning {
-  font-size: 0.75rem;
-  line-height: 1.45;
-  color: #f0883e;
-  background: rgba(240, 136, 62, 0.08);
-  border: 1px solid rgba(240, 136, 62, 0.4);
-  border-radius: 6px;
-  padding: 0.5rem 0.625rem;
-}
-
 .settings-auth-connected {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   margin: 0.25rem 0 0.5rem;
+}
+
+.settings-auth-connected--col {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+.settings-auth-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.settings-gmail-line {
+  font-size: 0.75rem;
+  color: #8b949e;
+  line-height: 1.4;
+  padding-left: 0.05rem;
+}
+
+.settings-gmail-line--warn {
+  color: #f0883e;
 }
 
 .settings-auth-pill {
@@ -360,40 +374,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-}
-
-.settings-oauth-redirect {
-  margin-bottom: 0.75rem;
-}
-
-.settings-oauth-redirect-hint {
-  font-size: 0.75rem;
-  line-height: 1.45;
-  color: #8b949e;
-  margin: 0 0 0.5rem;
-}
-
-.settings-oauth-redirect-hint strong {
-  color: #e6edf3;
-  font-weight: 600;
-}
-
-.settings-oauth-redirect-row {
-  margin-top: 0.25rem;
-}
-
-.settings-oauth-redirect-extra {
-  font-size: 0.6875rem;
-  line-height: 1.45;
-  color: #6e7681;
-  margin: 0.5rem 0 0;
-}
-
-.settings-oauth-code {
-  font-family: ui-monospace, "Cascadia Code", "Segoe UI Mono", monospace;
-  font-size: 0.7rem;
-  color: #79b8ff;
-  word-break: break-all;
 }
 
 .chat-container {

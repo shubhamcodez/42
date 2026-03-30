@@ -114,9 +114,13 @@ def _wrap_on_step_for_plan(
 ) -> Optional[Callable]:
     if not on_step:
         return None
-    label = {"desktop": "Desktop", "coding": "Coding", "shell": "Shell", "finance": "Finance"}.get(
-        agent_key, agent_key
-    )
+    label = {
+        "desktop": "Desktop",
+        "coding": "Coding",
+        "shell": "Shell",
+        "finance": "Finance",
+        "google": "Google",
+    }.get(agent_key, agent_key)
     off = bucket_index * _STEP_BUCKET
 
     def wrapped(step, thought, action, description, result, done, screenshot_base64=None):
@@ -132,6 +136,7 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
     from .coding_agent import run_coding_agent
     from .desktop_agent import run_desktop_agent
     from .finance_agent import run_finance_agent
+    from .google_workspace_agent import run_google_workspace_agent
     from .shell_agent import run_shell_agent
     from tools.web_search import augment_goal_with_web_search
 
@@ -150,6 +155,7 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
         "coding": "run_coding",
         "shell": "run_shell",
         "finance": "run_finance",
+        "google": "run_google",
     }
 
     sections: list[str] = []
@@ -205,6 +211,15 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
                 reply, tu = await asyncio.to_thread(
                     run_finance_agent, goal_run, wrapped, api_key, provider
                 )
+            elif agent == "google":
+                reply, tu = await asyncio.to_thread(
+                    run_google_workspace_agent,
+                    goal_run,
+                    state.get("google_session_id"),
+                    wrapped,
+                    api_key,
+                    provider,
+                )
             else:
                 continue
         except Exception as e:
@@ -216,9 +231,13 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
         elif ws_tool and last_tool is None:
             last_tool = ws_tool
 
-        title = {"desktop": "Desktop", "coding": "Coding", "shell": "Shell", "finance": "Finance"}.get(
-            agent, agent
-        )
+        title = {
+            "desktop": "Desktop",
+            "coding": "Coding",
+            "shell": "Shell",
+            "finance": "Finance",
+            "google": "Google",
+        }.get(agent, agent)
         sections.append(f"### {title}\n\n{reply}")
         prev_snippets.append(f"**{title}:**\n{(reply or '')[:8000]}")
         last_route = route_by_agent.get(str(agent), last_route)

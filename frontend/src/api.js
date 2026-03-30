@@ -213,6 +213,17 @@ export async function getGoogleAuthStatus() {
   return request('/auth/google/status');
 }
 
+/** Gmail profile for current session; does not throw on HTTP errors (returns { ok: false, error }). */
+export async function getGmailProfile() {
+  const base = import.meta.env.VITE_API_URL || '/api';
+  const res = await fetch(`${base}/integrations/gmail/profile`, { credentials: 'include' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { ok: false, error: data.error || `HTTP ${res.status}`, detail: data.detail };
+  }
+  return data;
+}
+
 export function getGoogleAuthLoginUrl(nextPath = '/settings') {
   const base = import.meta.env.VITE_API_URL || '/api'
   const path = nextPath && nextPath.startsWith('/') ? nextPath : '/settings'

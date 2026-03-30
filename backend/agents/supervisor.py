@@ -20,6 +20,7 @@ Specialists:
 3. **coding** – **Python sandbox**: numpy/pandas/matplotlib, yfinance inside code, simulations, plots — not desktop automation. For heavy analysis on tickers, prefer **coding** after **finance** if they need both data and plots.
 4. **shell** – **Host terminal** (git, npm, mkdir, PowerShell, bash). Only when they need the real machine shell. If shell is disabled on the server, do not choose **shell**.
 5. **finance** – **yfinance + short prose**: quotes, P/E, comparisons without custom code/plots.
+6. **google** – **Google Calendar + Gmail** (API): list/create/update/delete calendar events; list/read/send email; labels. Uses the user’s Google sign-in from the app (not desktop GUI).
 
 Reply with ONLY a JSON object, no markdown. Prefer this shape when **multiple** steps are needed:
 {
@@ -35,7 +36,7 @@ Reply with ONLY a JSON object, no markdown. Prefer this shape when **multiple** 
 For a **single** specialist you may use either `agents` with one element **or** the compact form:
 {
   "run_agent": true,
-  "agent": "desktop" or "coding" or "shell" or "finance",
+  "agent": "desktop" or "coding" or "shell" or "finance" or "google",
   "goal": "one clear sentence",
   "reasoning": "...",
   "next_steps": "..."
@@ -56,6 +57,7 @@ Rules:
 - **Programming / matplotlib / pandas / sandbox** → **coding** (not desktop).
 - **mkdir / git / npm / terminal** → **shell** (not desktop), only if appropriate.
 - **Ticker quote + plot** → often **finance** then **coding** in two entries.
+- **Calendar / schedule / Gmail / inbox / send email** → **google** (not desktop).
 - Be decisive. Output only valid JSON."""
 
 
@@ -134,7 +136,7 @@ def _sanitize_plan_entry(agent: Optional[str], goal: str, signal_text: str) -> O
     a = agent
     if a == "browser":
         return None
-    if a not in ("desktop", "coding", "shell", "finance"):
+    if a not in ("desktop", "coding", "shell", "finance", "google"):
         return None
     g = (goal or "").strip()
     if not g:
@@ -400,6 +402,50 @@ def _heuristic_finance_task(message: str) -> Optional[dict]:
     return None
 
 
+def _heuristic_google_task(message: str) -> Optional[dict]:
+    m = (message or "").strip()
+    if not m:
+        return None
+    low = m.lower()
+    hints = [
+        "google calendar",
+        "my calendar",
+        "gcal",
+        "calendar event",
+        "add event to calendar",
+        "create event ",
+        "schedule a meeting",
+        "schedule meeting",
+        "delete event ",
+        "cancel event ",
+        "reschedule ",
+        "what's on my calendar",
+        "whats on my calendar",
+        "upcoming events",
+        "gmail",
+        "my gmail",
+        "my inbox",
+        "unread email",
+        "unread mail",
+        "send an email",
+        "send email to",
+        "email to ",
+        "compose email",
+        "draft an email",
+        "mark as read",
+        "trash email",
+        "archive email",
+        "label in gmail",
+    ]
+    if any(h in low for h in hints):
+        return _decision_with_agents(
+            [{"agent": "google", "goal": m}],
+            "Heuristic: Google Calendar or Gmail (API via user sign-in).",
+            "1. Plan Calendar/Gmail operations 2. Execute with OAuth 3. Summarize for user",
+        )
+    return None
+
+
 def _parse_agents_array(out: dict[str, Any], user_message: str) -> list[dict[str, str]]:
     raw = out.get("agents")
     if not isinstance(raw, list):
@@ -437,6 +483,10 @@ def supervisor_decision(api_key: str, provider: str, user_message: str) -> dict:
     hinted_finance = _heuristic_finance_task(user_message)
     if hinted_finance:
         return hinted_finance
+
+    hinted_google = _heuristic_google_task(user_message)
+    if hinted_google:
+        return hinted_google
 
     mod = get_llm_client(provider)
     client = mod._client(api_key)

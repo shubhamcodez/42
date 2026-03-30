@@ -12,7 +12,7 @@ import os
 import secrets
 import threading
 import time
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 from pathlib import Path
 from typing import Any
 
@@ -83,7 +83,8 @@ def _scopes() -> str:
     return (
         "openid email profile "
         "https://www.googleapis.com/auth/calendar "
-        "https://www.googleapis.com/auth/gmail.readonly"
+        "https://www.googleapis.com/auth/gmail.modify "
+        "https://www.googleapis.com/auth/gmail.send"
     )
 
 
@@ -103,6 +104,28 @@ def oauth_missing_config_fields() -> list[str]:
 def oauth_redirect_uri() -> str:
     """Exact redirect_uri sent to Google; must match Authorized redirect URIs in GCP (character-for-character)."""
     return _redirect_uri()
+
+
+def oauth_client_id_hint() -> str | None:
+    """Short fingerprint so you can confirm .env matches the OAuth client you edited in GCP (client id is public)."""
+    cid = _client_id()
+    if not cid:
+        return None
+    if len(cid) <= 24:
+        return f"{cid[:8]}…"
+    return f"{cid[:12]}…{cid[-10:]}"
+
+
+def oauth_suggested_javascript_origin() -> str | None:
+    """Origin derived from redirect URI; add under Authorized JavaScript origins for Web clients when Google asks."""
+    u = _redirect_uri()
+    try:
+        p = urlparse(u)
+        if p.scheme and p.netloc:
+            return f"{p.scheme}://{p.netloc}"
+    except Exception:
+        pass
+    return None
 
 
 def _empty_store() -> dict[str, Any]:
@@ -237,6 +260,13 @@ def exchange_code_and_create_session(code: str, state: str) -> tuple[str, str]:
         sessions = data.setdefault("sessions", {})
         current = users.get(sub) or {}
         old_refresh = ((current.get("tokens") or {}).get("refresh_token") or "").strip()
+        exp_at = None
+        ei = token_data.get("expires_in")
+        if ei is not None:
+            try:
+                exp_at = _now() + int(ei)
+            except (TypeError, ValueError):
+                pass
         users[sub] = {
             "sub": sub,
             "email": profile.get("email"),
@@ -249,6 +279,7 @@ def exchange_code_and_create_session(code: str, state: str) -> tuple[str, str]:
                 "scope": token_data.get("scope"),
                 "token_type": token_data.get("token_type"),
                 "expires_in": token_data.get("expires_in"),
+                "expires_at": exp_at,
                 "id_token": token_data.get("id_token"),
             },
         }
@@ -257,6 +288,94 @@ def exchange_code_and_create_session(code: str, state: str) -> tuple[str, str]:
 
     next_path = str(pending.get("next_path") or "/").strip() or "/"
     return sid, next_path
+
+
+def _access_token_stale(tokens: dict[str, Any]) -> bool:
+    exp = tokens.get("expires_at")
+    if exp is None:
+        return True
+    try:
+        return _now() >= int(exp) - 120
+    except (TypeError, ValueError):
+        return True
+
+
+def _refresh_tokens_for_user(data: dict[str, Any], sub: str) -> str:
+    """Refresh Google access token; mutates data['users'][sub]['tokens']. Returns new access_token."""
+    users = data.setdefault("users", {})
+    user = users.get(sub) or {}
+    tok = dict(user.get("tokens") or {})
+    rt = (tok.get("refresh_token") or "").strip()
+    if not rt:
+        raise ValueError("Missing refresh token. Sign in with Google again.")
+    if not oauth_is_configured():
+        raise ValueError("OAuth client is not configured on the server.")
+    resp = httpx.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "client_id": _client_id(),
+            "client_secret": _client_secret(),
+            "refresh_token": rt,
+            "grant_type": "refresh_token",
+        },
+        timeout=20.0,
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    at = (body.get("access_token") or "").strip()
+    if not at:
+        raise ValueError("Token refresh did not return access_token.")
+    exp_at = None
+    if body.get("expires_in") is not None:
+        try:
+            exp_at = _now() + int(body["expires_in"])
+        except (TypeError, ValueError):
+            pass
+    new_refresh = (body.get("refresh_token") or "").strip() or rt
+    user["tokens"] = {
+        **tok,
+        "access_token": at,
+        "refresh_token": new_refresh,
+        "expires_in": body.get("expires_in"),
+        "expires_at": exp_at,
+        "scope": body.get("scope") or tok.get("scope"),
+        "token_type": body.get("token_type") or tok.get("token_type"),
+    }
+    user["updated_at"] = _now()
+    users[sub] = user
+    return at
+
+
+def get_valid_access_token_for_session(session_id: str | None) -> tuple[str | None, str | None]:
+    """
+    Return (access_token, error_message). Refreshes the access token when stale or missing
+    (if a refresh_token is stored).
+    """
+    if not session_id:
+        return None, "Not signed in."
+    with _LOCK:
+        data = _load_store()
+        _cleanup_expired(data)
+        sessions = data.get("sessions") or {}
+        users = data.get("users") or {}
+        row = sessions.get(session_id)
+        if not row:
+            _save_store(data)
+            return None, "Session expired. Sign in again."
+        sub = row.get("sub")
+        user = users.get(sub) or {}
+        tok = user.get("tokens") or {}
+        access = (tok.get("access_token") or "").strip()
+        if (not access or _access_token_stale(tok)) and (tok.get("refresh_token") or "").strip():
+            try:
+                access = _refresh_tokens_for_user(data, str(sub))
+            except Exception as e:
+                _save_store(data)
+                return None, str(e)
+        _save_store(data)
+    if not access:
+        return None, "No access token. Sign in with Google again."
+    return access, None
 
 
 def google_status_by_session(session_id: str | None) -> dict[str, Any]:
