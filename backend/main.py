@@ -28,9 +28,9 @@ warnings.filterwarnings(
 
 import json
 
-from fastapi import FastAPI, File, Form, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
 from config import (
@@ -72,6 +72,18 @@ from tools.python_sandbox import run_sandboxed_python
 from tools.sandbox_markdown import redact_sandbox_result_dict
 from tools.file_grep import grep_files
 from tools.shell_runner import is_shell_enabled, run_shell_command
+from auth.google_oauth import (
+    callback_error_redirect,
+    callback_success_redirect,
+    cookie_secure,
+    create_login_url,
+    disconnect_session,
+    exchange_code_and_create_session,
+    google_status_by_session,
+    logout_session,
+    oauth_missing_config_fields,
+    oauth_redirect_uri,
+)
 
 app = FastAPI(title="JARVIS API")
 app.add_middleware(
@@ -854,6 +866,66 @@ async def api_set_model(body: SetModelRequest):
     """Set LLM provider to openai or xai."""
     set_llm_provider(body.provider)
     return {"provider": get_llm_provider()}
+
+
+# --- Google OAuth (multi-user scaffold) ---
+@app.get("/auth/google/status")
+async def api_google_auth_status(request: Request):
+    sid = request.cookies.get("jarvis_google_sid")
+    info = google_status_by_session(sid)
+    info["redirect_uri"] = oauth_redirect_uri()
+    if not info.get("configured"):
+        info["missing_fields"] = oauth_missing_config_fields()
+    return info
+
+
+@app.get("/auth/google/login")
+async def api_google_auth_login(next_path: str = Query("/", alias="next")):
+    try:
+        auth_url = create_login_url(next_path=next_path)
+    except Exception as e:
+        return RedirectResponse(url=callback_error_redirect(str(e)))
+    return RedirectResponse(url=auth_url)
+
+
+@app.get("/auth/google/callback")
+async def api_google_auth_callback(code: str | None = None, state: str | None = None):
+    if not code or not state:
+        return RedirectResponse(url=callback_error_redirect("Missing OAuth code/state"))
+    try:
+        sid, next_path = exchange_code_and_create_session(code=code, state=state)
+        redirect_url = callback_success_redirect(next_path)
+        resp = RedirectResponse(url=redirect_url)
+        resp.set_cookie(
+            "jarvis_google_sid",
+            sid,
+            httponly=True,
+            samesite="lax",
+            secure=cookie_secure(),
+            max_age=30 * 24 * 60 * 60,
+            path="/",
+        )
+        return resp
+    except Exception as e:
+        return RedirectResponse(url=callback_error_redirect(str(e)))
+
+
+@app.post("/auth/google/logout")
+async def api_google_auth_logout(request: Request):
+    sid = request.cookies.get("jarvis_google_sid")
+    logout_session(sid)
+    out = JSONResponse({"ok": True})
+    out.delete_cookie("jarvis_google_sid", path="/")
+    return out
+
+
+@app.post("/auth/google/disconnect")
+async def api_google_auth_disconnect(request: Request):
+    sid = request.cookies.get("jarvis_google_sid")
+    disconnect_session(sid)
+    out = JSONResponse({"ok": True})
+    out.delete_cookie("jarvis_google_sid", path="/")
+    return out
 
 
 # --- Observability: traces, evals, optimization (per-model) ---

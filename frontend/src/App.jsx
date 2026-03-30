@@ -14,6 +14,10 @@ import {
   setChatsStoragePath,
   getModelSetting,
   setModelSetting,
+  getGoogleAuthStatus,
+  getGoogleAuthLoginUrl,
+  googleLogout,
+  googleDisconnect,
   agentStepsWsUrl,
 } from './api'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
@@ -213,6 +217,14 @@ function App() {
   const [attachments, setAttachments] = useState([])
   const [storagePath, setStoragePath] = useState('')
   const [modelProvider, setModelProvider] = useState('openai')
+  const [googleAuth, setGoogleAuth] = useState({
+    configured: false,
+    connected: false,
+    user: null,
+    missingFields: [],
+    redirectUri: '',
+  })
+  const [googleAuthBusy, setGoogleAuthBusy] = useState(false)
   const [sending, setSending] = useState(false)
   const [liveReply, setLiveReply] = useState(null)
   const [streamTimeline, setStreamTimeline] = useState([])
@@ -258,10 +270,32 @@ function App() {
     }
   }, [])
 
+  const refreshGoogleAuth = useCallback(async () => {
+    try {
+      const status = await getGoogleAuthStatus()
+      setGoogleAuth({
+        configured: !!status?.configured,
+        connected: !!status?.connected,
+        user: status?.user || null,
+        missingFields: Array.isArray(status?.missing_fields) ? status.missing_fields : [],
+        redirectUri: typeof status?.redirect_uri === 'string' ? status.redirect_uri : '',
+      })
+    } catch {
+      setGoogleAuth({
+        configured: false,
+        connected: false,
+        user: null,
+        missingFields: [],
+        redirectUri: '',
+      })
+    }
+  }, [])
+
   const refreshSettings = useCallback(async () => {
     await refreshStoragePath()
     await refreshModelSetting()
-  }, [refreshStoragePath, refreshModelSetting])
+    await refreshGoogleAuth()
+  }, [refreshStoragePath, refreshModelSetting, refreshGoogleAuth])
 
   const selectChat = useCallback(async (chatId) => {
     try {
@@ -289,6 +323,21 @@ function App() {
   useEffect(() => {
     if (panel === 'settings') refreshSettings()
   }, [panel, refreshSettings])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const connected = params.get('google_connected')
+    const err = params.get('google_auth_error')
+    if (connected === '1' || err) {
+      if (connected === '1') refreshGoogleAuth()
+      if (err) alert(`Google sign-in failed: ${err}`)
+      params.delete('google_connected')
+      params.delete('google_auth_error')
+      const q = params.toString()
+      const next = `${window.location.pathname}${q ? `?${q}` : ''}${window.location.hash || ''}`
+      window.history.replaceState({}, '', next)
+    }
+  }, [refreshGoogleAuth])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -655,6 +704,143 @@ function App() {
                   <option value="openai">OpenAI (GPT-4o)</option>
                   <option value="xai">xAI (Grok)</option>
                 </select>
+              </div>
+              <div className="settings-section">
+                <label className="settings-label">Google Calendar + Gmail access</label>
+                <p className="settings-description">
+                  Users sign in with Google to connect their own Calendar and Gmail.
+                </p>
+                {googleAuth.redirectUri ? (
+                  <div className="settings-oauth-redirect">
+                    <p className="settings-oauth-redirect-hint">
+                      If Google shows <strong>redirect_uri_mismatch</strong>, add this exact URL under{' '}
+                      <strong>Google Cloud Console → APIs &amp; Services → Credentials → your OAuth Web client →
+                      Authorized redirect URIs</strong>. Use an <strong>Web application</strong> client (not Desktop).
+                    </p>
+                    <div className="settings-storage-row settings-oauth-redirect-row">
+                      <input
+                        type="text"
+                        readOnly
+                        className="settings-storage-input"
+                        value={googleAuth.redirectUri}
+                        aria-label="OAuth redirect URI for Google Cloud Console"
+                      />
+                      <button
+                        type="button"
+                        className="settings-storage-btn"
+                        onClick={async () => {
+                          const u = googleAuth.redirectUri
+                          if (!u) return
+                          try {
+                            await navigator.clipboard.writeText(u)
+                            alert('Redirect URI copied to clipboard.')
+                          } catch {
+                            alert(u)
+                          }
+                        }}
+                      >
+                        Copy
+                      </button>
+                    </div>
+                    <p className="settings-oauth-redirect-extra">
+                      Optional: also add <code className="settings-oauth-code">http://127.0.0.1:5173/api/auth/google/callback</code>{' '}
+                      if you open the app via <code className="settings-oauth-code">127.0.0.1</code> instead of{' '}
+                      <code className="settings-oauth-code">localhost</code>.
+                    </p>
+                  </div>
+                ) : null}
+                {!googleAuth.configured ? (
+                  <>
+                    <p className="settings-auth-warning">
+                      Backend OAuth is not configured yet.
+                      {googleAuth.missingFields?.length > 0
+                        ? ` Missing: ${googleAuth.missingFields.join(', ')}`
+                        : ' Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET in your server environment.'}
+                    </p>
+                    <div className="settings-auth-actions">
+                      <button
+                        type="button"
+                        className="settings-storage-btn"
+                        onClick={() => {
+                          window.location.href = getGoogleAuthLoginUrl('/settings')
+                        }}
+                      >
+                        Sign in with Google
+                      </button>
+                      <button
+                        type="button"
+                        className="settings-storage-btn"
+                        onClick={refreshGoogleAuth}
+                      >
+                        Retry check
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {googleAuth.connected ? (
+                      <div className="settings-auth-connected">
+                        <span className="settings-auth-pill">Connected</span>
+                        <span className="settings-auth-user">
+                          {googleAuth.user?.email || googleAuth.user?.name || 'Google account'}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="settings-auth-connected">
+                        <span className="settings-auth-pill settings-auth-pill--idle">Not connected</span>
+                      </div>
+                    )}
+                    <div className="settings-auth-actions">
+                      {!googleAuth.connected ? (
+                        <button
+                          type="button"
+                          className="settings-storage-btn"
+                          onClick={() => {
+                            window.location.href = getGoogleAuthLoginUrl('/settings')
+                          }}
+                        >
+                          Sign in with Google
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="settings-storage-btn"
+                            disabled={googleAuthBusy}
+                            onClick={async () => {
+                              setGoogleAuthBusy(true)
+                              try {
+                                await googleLogout()
+                                await refreshGoogleAuth()
+                              } finally {
+                                setGoogleAuthBusy(false)
+                              }
+                            }}
+                          >
+                            Log out
+                          </button>
+                          <button
+                            type="button"
+                            className="settings-storage-btn"
+                            disabled={googleAuthBusy}
+                            onClick={async () => {
+                              if (!confirm('Disconnect Google account and revoke stored access?')) return
+                              setGoogleAuthBusy(true)
+                              try {
+                                await googleDisconnect()
+                                await refreshGoogleAuth()
+                              } finally {
+                                setGoogleAuthBusy(false)
+                              }
+                            }}
+                          >
+                            Disconnect
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </div>

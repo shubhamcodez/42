@@ -3,6 +3,7 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api';
 async function request(path, options = {}) {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
   const res = await fetch(url, {
+    credentials: 'include',
     ...options,
     headers: { 'Content-Type': 'application/json', ...options.headers },
   });
@@ -59,6 +60,7 @@ export async function sendMessageStream(
   const base = import.meta.env.VITE_API_URL || '/api'
   const res = await fetch(base + '/chat/send-message/stream', {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       message: message || '',
@@ -123,7 +125,7 @@ export async function sendMessageWithFiles(message, files = [], chatId = null, w
   }
   const base = import.meta.env.VITE_API_URL || '/api';
   const url = base + '/chat/send-message-with-files';
-  const res = await fetch(url, { method: 'POST', body: form });
+  const res = await fetch(url, { method: 'POST', body: form, credentials: 'include' });
   if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`);
   const data = await res.json();
   return data.reply;
@@ -205,4 +207,22 @@ export function agentStepsWsUrl() {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = window.location.host;
   return `${proto}//${host}/ws/agent-steps`;
+}
+
+export async function getGoogleAuthStatus() {
+  return request('/auth/google/status');
+}
+
+export function getGoogleAuthLoginUrl(nextPath = '/settings') {
+  const base = import.meta.env.VITE_API_URL || '/api'
+  const path = nextPath && nextPath.startsWith('/') ? nextPath : '/settings'
+  return `${base}/auth/google/login?next=${encodeURIComponent(path)}`
+}
+
+export async function googleLogout() {
+  return request('/auth/google/logout', { method: 'POST' });
+}
+
+export async function googleDisconnect() {
+  return request('/auth/google/disconnect', { method: 'POST' });
 }

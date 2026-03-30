@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "google-calendar": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@cocal/google-calendar-mcp"
+      ],
+      "env": {
+        "GOOGLE_OAUTH_CREDENTIALS": "E:/Socrates/.secrets/google-oauth.keys.json"
+      }
+    }
+  }
+}
