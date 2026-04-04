@@ -1,0 +1,233 @@
+/* Theme tokens — toggled via document.documentElement[data-theme="light|dark"] */
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-base: #0a0a0a;
+  --bg-navbar: #0b0b0c;
+  --bg-sidebar: #0a0a0a;
+  --bg-footer: #080808;
+  --bg-input-area: #0a0a0a;
+  --bg-input: #0a0a0a;
+  --bg-elevated: #141414;
+  --bg-elevated-2: #1a1a1a;
+  --bg-elevated-hover: #1f1f1f;
+  --bg-deep: #0d1117;
+  --bg-blackish: #010409;
+  --bg-chat-active: #141414;
+  --bg-menu-active: #161b22;
+
+  --border-default: #1a1a1a;
+  --border-secondary: #21262d;
+  --border-strong: #30363d;
+  --border-stream: #1f2a33;
+  --border-navbar: rgba(255, 255, 255, 0.055);
+  --border-footer: #242424;
+
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #737373;
+  --text-tertiary: #6e7681;
+
+  --accent: #58a6ff;
+  --accent-hover: #79b8ff;
+  --accent-muted: #388bfd66;
+
+  --navbar-title: #eef2f6;
+  --navbar-segment-bg: rgba(255, 255, 255, 0.04);
+  --navbar-segment-border: rgba(255, 255, 255, 0.06);
+  --navbar-segment-inset: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --navbar-link-muted: rgba(230, 237, 243, 0.5);
+  --navbar-new-chat-border: rgba(255, 255, 255, 0.09);
+  --navbar-new-chat-bg: rgba(255, 255, 255, 0.04);
+  --navbar-new-chat-fg: rgba(230, 237, 243, 0.72);
+
+  --repo-card-bg: radial-gradient(120% 80% at 0% 0%, rgba(72, 110, 98, 0.14), transparent 55%),
+    linear-gradient(165deg, #151816 0%, #0e0f10 100%);
+  --repo-card-border: rgba(120, 175, 155, 0.22);
+  --repo-card-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35) inset, 0 8px 24px rgba(0, 0, 0, 0.25);
+  --repo-linked-row-bg: rgba(0, 0, 0, 0.22);
+  --repo-linked-row-border: rgba(120, 175, 155, 0.12);
+  --repo-tree-bg: rgba(0, 0, 0, 0.28);
+  --repo-tree-toolbar-bg: rgba(0, 0, 0, 0.2);
+  --repo-tree-toolbar-border: rgba(255, 255, 255, 0.06);
+  --repo-tree-empty-bg: rgba(0, 0, 0, 0.2);
+
+  /* Project context & explorer (paired with light theme below) */
+  --repo-context-pulse: #4ade80;
+  --repo-context-pulse-glow: rgba(74, 222, 128, 0.55);
+  --repo-context-title: #dbe8e3;
+  --repo-context-muted: #7a9088;
+  --repo-context-hint: #9aada5;
+  --repo-primary-btn-bg: linear-gradient(180deg, #2f6f56 0%, #265a45 100%);
+  --repo-primary-btn-bg-hover: linear-gradient(180deg, #3a8568 0%, #2d6b52 100%);
+  --repo-primary-btn-fg: #f2faf7;
+  --repo-primary-btn-border: rgba(95, 212, 165, 0.35);
+  --repo-primary-btn-inset: rgba(255, 255, 255, 0.06);
+  --repo-ghost-bg: rgba(255, 255, 255, 0.04);
+  --repo-ghost-bg-hover: rgba(255, 255, 255, 0.08);
+  --repo-ghost-fg: #c5d3cc;
+  --repo-ghost-border: #333;
+  --repo-form-divider: rgba(120, 175, 155, 0.2);
+  --repo-input-bg: rgba(10, 12, 11, 0.65);
+  --repo-input-fg: #d9e6df;
+  --repo-input-border: rgba(90, 120, 108, 0.45);
+  --repo-input-focus: rgba(95, 212, 165, 0.55);
+  --repo-input-focus-ring: rgba(95, 212, 165, 0.2);
+  --repo-input-placeholder: #556860;
+  --repo-icon-wrap-bg: rgba(95, 212, 165, 0.1);
+  --repo-icon-wrap-fg: #7ecfb0;
+  --repo-linked-name: #e2f0ea;
+  --repo-linked-path: #718c82;
+  --repo-icon-btn-bg: rgba(255, 255, 255, 0.05);
+  --repo-icon-btn-fg: #9fbdb2;
+  --repo-icon-btn-hover-bg: rgba(95, 212, 165, 0.15);
+  --repo-icon-btn-hover-fg: #c5eadc;
+  --repo-tree-shell-border: rgba(120, 175, 155, 0.14);
+  --repo-tree-toolbar-label: #8aa89c;
+  --repo-tree-toolbar-count: #5c7268;
+  --repo-tree-folder: #c9a96a;
+  --repo-tree-file: #8e9e96;
+  --repo-tree-file-muted: #9aada5;
+  --repo-tree-chev: #6d887c;
+  --repo-tree-chev-hover-bg: rgba(95, 212, 165, 0.12);
+  --repo-tree-chev-hover-fg: #9edcc4;
+  --repo-tree-file-hover: #b8ccc0;
+  --repo-tree-file-hover-bg: rgba(95, 212, 165, 0.1);
+  --repo-tree-empty-fg: #718c82;
+  --repo-tree-empty-border: rgba(120, 175, 155, 0.2);
+
+  --markdown-code-bg: rgba(0, 0, 0, 0.25);
+  --markdown-pre-bg: rgba(0, 0, 0, 0.3);
+
+  --shadow-menu: 0 10px 40px rgba(0, 0, 0, 0.55);
+  --shadow-navbar: none;
+
+  --agent-step-bg: #0a0a0a;
+  --agent-step-shot-bg: #0a0a0a;
+  --stream-shot-label-bg: #0d1117;
+
+  --settings-auth-pill-idle-fg: #d0d7de;
+
+  --msg-stream-border: #1f2a33;
+  --msg-stream-bg: linear-gradient(180deg, #0d1117 0%, #0a0a0a 100%);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-base: #f6f8fa;
+  --bg-navbar: #ffffff;
+  --bg-sidebar: #ffffff;
+  --bg-footer: #ffffff;
+  --bg-input-area: #ffffff;
+  --bg-input: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-elevated-2: #eaeef2;
+  --bg-elevated-hover: #eaeef2;
+  --bg-deep: #f6f8fa;
+  --bg-blackish: #eaeef2;
+  --bg-chat-active: #eaeef2;
+  --bg-menu-active: #ddf4ff;
+
+  --border-default: #d0d7de;
+  --border-secondary: #d8dee4;
+  --border-strong: #d0d7de;
+  --border-stream: #d0d7de;
+  --border-navbar: rgba(31, 35, 40, 0.12);
+  --border-footer: #d0d7de;
+
+  --text-primary: #1f2328;
+  --text-secondary: #57606a;
+  --text-muted: #656d76;
+  --text-tertiary: #57606a;
+
+  --accent: #0969da;
+  --accent-hover: #0550ae;
+  --accent-muted: #0969da55;
+
+  --navbar-title: #1f2328;
+  --navbar-segment-bg: rgba(31, 35, 40, 0.06);
+  --navbar-segment-border: rgba(31, 35, 40, 0.12);
+  --navbar-segment-inset: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --navbar-link-muted: rgba(31, 35, 40, 0.55);
+  --navbar-new-chat-border: rgba(31, 35, 40, 0.12);
+  --navbar-new-chat-bg: rgba(31, 35, 40, 0.05);
+  --navbar-new-chat-fg: rgba(31, 35, 40, 0.72);
+
+  --repo-card-bg: radial-gradient(120% 80% at 0% 0%, rgba(72, 110, 98, 0.08), transparent 55%),
+    linear-gradient(165deg, #f4fbf8 0%, #e8f5ef 100%);
+  --repo-card-border: rgba(72, 110, 98, 0.28);
+  --repo-card-shadow: 0 0 0 1px rgba(31, 35, 40, 0.06) inset, 0 8px 24px rgba(31, 35, 40, 0.08);
+  --repo-linked-row-bg: rgba(255, 255, 255, 0.85);
+  --repo-linked-row-border: rgba(72, 110, 98, 0.22);
+  --repo-tree-bg: rgba(31, 35, 40, 0.05);
+  --repo-tree-toolbar-bg: rgba(31, 35, 40, 0.04);
+  --repo-tree-toolbar-border: rgba(31, 35, 40, 0.08);
+  --repo-tree-empty-bg: rgba(31, 35, 40, 0.04);
+
+  --repo-context-pulse: #1a7f37;
+  --repo-context-pulse-glow: rgba(26, 127, 55, 0.35);
+  --repo-context-title: #1f2328;
+  --repo-context-muted: #57606a;
+  --repo-context-hint: #656d76;
+  --repo-primary-btn-bg: linear-gradient(180deg, #2d8659 0%, #237a4e 100%);
+  --repo-primary-btn-bg-hover: linear-gradient(180deg, #349a6c 0%, #2d8659 100%);
+  --repo-primary-btn-fg: #ffffff;
+  --repo-primary-btn-border: rgba(45, 134, 89, 0.4);
+  --repo-primary-btn-inset: rgba(255, 255, 255, 0.25);
+  --repo-ghost-bg: rgba(31, 35, 40, 0.06);
+  --repo-ghost-bg-hover: rgba(31, 35, 40, 0.1);
+  --repo-ghost-fg: #24292f;
+  --repo-ghost-border: #d0d7de;
+  --repo-form-divider: rgba(72, 110, 98, 0.22);
+  --repo-input-bg: #ffffff;
+  --repo-input-fg: #1f2328;
+  --repo-input-border: #d0d7de;
+  --repo-input-focus: #0969da;
+  --repo-input-focus-ring: rgba(9, 105, 218, 0.2);
+  --repo-input-placeholder: #656d76;
+  --repo-icon-wrap-bg: rgba(72, 110, 98, 0.12);
+  --repo-icon-wrap-fg: #1f5138;
+  --repo-linked-name: #1f2328;
+  --repo-linked-path: #57606a;
+  --repo-icon-btn-bg: rgba(31, 35, 40, 0.06);
+  --repo-icon-btn-fg: #57606a;
+  --repo-icon-btn-hover-bg: rgba(72, 110, 98, 0.14);
+  --repo-icon-btn-hover-fg: #1f2328;
+  --repo-tree-shell-border: rgba(72, 110, 98, 0.2);
+  --repo-tree-toolbar-label: #57606a;
+  --repo-tree-toolbar-count: #656d76;
+  --repo-tree-folder: #8b5a00;
+  --repo-tree-file: #57606a;
+  --repo-tree-file-muted: #656d76;
+  --repo-tree-chev: #57606a;
+  --repo-tree-chev-hover-bg: rgba(9, 105, 218, 0.1);
+  --repo-tree-chev-hover-fg: #24292f;
+  --repo-tree-file-hover: #24292f;
+  --repo-tree-file-hover-bg: rgba(9, 105, 218, 0.08);
+  --repo-tree-empty-fg: #57606a;
+  --repo-tree-empty-border: rgba(72, 110, 98, 0.22);
+
+  --markdown-code-bg: rgba(31, 35, 40, 0.08);
+  --markdown-pre-bg: rgba(31, 35, 40, 0.06);
+
+  --shadow-menu: 0 12px 40px rgba(31, 35, 40, 0.12);
+  --shadow-navbar: 0 1px 0 rgba(31, 35, 40, 0.06);
+
+  --agent-step-bg: #f6f8fa;
+  --agent-step-shot-bg: #ffffff;
+  --stream-shot-label-bg: #f6f8fa;
+
+  --settings-auth-pill-idle-fg: #57606a;
+
+  --msg-stream-border: #d0d7de;
+  --msg-stream-bg: linear-gradient(180deg, #ffffff 0%, #f6f8fa 100%);
+}
+
+html,
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+}

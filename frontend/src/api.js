@@ -38,7 +38,7 @@ export async function sendMessage(
   chatId = null,
   webSearchQuery = null,
   codingMode = false,
-  codingProjectPath = null,
+  codingProjectSnapshot = null,
 ) {
   const { reply } = await request('/chat/send-message', {
     method: 'POST',
@@ -48,7 +48,7 @@ export async function sendMessage(
       chat_id: chatId,
       web_search_query: webSearchQuery || null,
       coding_mode: !!codingMode,
-      coding_project_path: codingProjectPath || null,
+      coding_project_snapshot: codingProjectSnapshot || null,
     }),
   });
   return reply;
@@ -72,7 +72,7 @@ export async function sendMessageStream(
     onAgentStep,
     webSearchQuery = null,
     codingMode = false,
-    codingProjectPath = null,
+    codingProjectSnapshot = null,
   },
 ) {
   const base = import.meta.env.VITE_API_URL || '/api'
@@ -86,7 +86,7 @@ export async function sendMessageStream(
       chat_id: chatId || null,
       web_search_query: webSearchQuery || null,
       coding_mode: !!codingMode,
-      coding_project_path: codingProjectPath || null,
+      coding_project_snapshot: codingProjectSnapshot || null,
     }),
   })
   if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`)
@@ -141,14 +141,14 @@ export async function sendMessageWithFiles(
   chatId = null,
   webSearchQuery = null,
   codingMode = false,
-  codingProjectPath = null,
+  codingProjectSnapshot = null,
 ) {
   const form = new FormData();
   form.append('message', message || '');
   form.append('chat_id', chatId ?? '');
   if (webSearchQuery) form.append('web_search_query', webSearchQuery);
   if (codingMode) form.append('coding_mode', 'true');
-  if (codingProjectPath) form.append('coding_project_path', codingProjectPath);
+  if (codingProjectSnapshot) form.append('coding_project_snapshot', codingProjectSnapshot);
   for (const f of files) {
     form.append('files', f);
   }
@@ -265,4 +265,20 @@ export async function googleLogout() {
 
 export async function googleDisconnect() {
   return request('/auth/google/disconnect', { method: 'POST' });
+}
+
+/**
+ * Run one command on the API host (see ADA_ENABLE_SHELL; Windows defaults to PowerShell).
+ * @param {string} command
+ * @param {number} [timeoutSec]
+ * @returns {Promise<{ ok: boolean, returncode?: number, stdout?: string, stderr?: string, error?: string, shell?: string|null }>}
+ */
+export async function runHostShellCommand(command, timeoutSec = 120) {
+  return request('/tools/shell', {
+    method: 'POST',
+    body: JSON.stringify({
+      command: command || '',
+      timeout_sec: timeoutSec,
+    }),
+  })
 }

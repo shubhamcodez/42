@@ -20,7 +20,26 @@ import {
   googleLogout,
   googleDisconnect,
   agentStepsWsUrl,
+  runHostShellCommand,
 } from './api'
+import {
+  buildSnapshotFromDirectoryHandle,
+  buildSnapshotFromFileList,
+  canUseDirectoryPicker,
+  parseRelPathsFromSnapshotMarkdown,
+  readProjectFileText,
+  writeProjectFileText,
+} from './projectSnapshot'
+import {
+  saveProjectRootHandleRecord,
+  loadProjectRootHandleRecord,
+  clearProjectRootHandleRecord,
+  ensureDirectoryReadPermission,
+  ensureDirectoryReadWritePermission,
+} from './projectHandleStorage'
+import { getPreviewFileText, clearPreviewCacheForRoot, putPreviewFileText } from './projectFileCache'
+import { getActiveFileMention, rankProjectPathMatches } from './projectPathSuggest'
+import { ProjectFileTree } from './ProjectFileTree'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import './App.css'
@@ -165,19 +184,18 @@ const GLOBE_MENU_ICON = (
   </svg>
 )
 
+const NAV_NEW_CHAT_ICON = (
+  <svg className="navbar-new-chat__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+)
+
 /** Sidebar / footer folder mark (stroke, matches other UI icons). */
 const REPO_FOLDER_ICON = (
   <svg className="repo-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     <path d="M3 7.5V19a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-7l-2-2H5a2 2 0 00-2 2v.5" />
   </svg>
 )
-
-function workspaceBasename(path) {
-  const p = (path || '').trim().replace(/[/\\]+$/, '')
-  if (!p) return ''
-  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
-  return i >= 0 ? p.slice(i + 1) : p
-}
 
 function CopyResponseButton({ text }) {
   const [copied, setCopied] = useState(false)
@@ -223,7 +241,291 @@ function CopyResponseButton({ text }) {
   )
 }
 
+/** VS Code–style file tab above chat when opening from explorer (editable; Save writes disk or cache). */
+function ChatFilePreview({ preview, onClose, onSave }) {
+  const [draft, setDraft] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState(null)
+  const [saveFlash, setSaveFlash] = useState(null)
+
+  useEffect(() => {
+    setSaveError(null)
+    setSaveFlash(null)
+    if (!preview) {
+      setDraft('')
+      return
+    }
+    if (preview.loading || preview.error) {
+      setDraft('')
+      return
+    }
+    setDraft(preview.body ?? '')
+  }, [preview?.relPath, preview?.loading, preview?.error, preview?.body])
+
+  if (!preview) return null
+  const { title, loading, error, source } = preview
+  const body = preview.body ?? ''
+  const dirty = !loading && !error && draft !== body
+  const showEditor = !loading && !error
+
+  const handleSave = async () => {
+    if (!onSave || !preview.relPath || saving || !dirty) return
+    setSaving(true)
+    setSaveError(null)
+    setSaveFlash(null)
+    try {
+      const r = await onSave(preview.relPath, draft)
+      if (!r?.ok) {
+        setSaveError(r?.error || 'Save failed.')
+        return
+      }
+      setSaveFlash(
+        r.cacheOnly ? 'Saved to browser cache (re-link folder to write disk).' : 'Saved to disk.',
+      )
+      window.setTimeout(() => setSaveFlash(null), 4000)
+    } catch (e) {
+      setSaveError(e?.message || 'Save failed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="chat-file-preview" role="region" aria-label="Open file">
+      <div className="chat-file-preview__toolbar">
+        <span className="chat-file-preview__path" title={title}>
+          {title}
+        </span>
+        {showEditor && onSave ? (
+          <div className="chat-file-preview__actions">
+            {saveError ? <span className="chat-file-preview__save-msg chat-file-preview__save-msg--err">{saveError}</span> : null}
+            {saveFlash && !saveError ? (
+              <span className="chat-file-preview__save-msg chat-file-preview__save-msg--ok">{saveFlash}</span>
+            ) : null}
+            <button
+              type="button"
+              className="chat-file-preview__save"
+              onClick={() => handleSave()}
+              disabled={!dirty || saving}
+              title="Save (Ctrl+S)"
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        ) : null}
+        <button type="button" className="chat-file-preview__close" onClick={onClose} aria-label="Close file">
+          ×
+        </button>
+      </div>
+      {source === 'snapshot' ? (
+        <p className="chat-file-preview__hint">
+          Showing text from your project index (may be truncated). Re-open the folder with the system folder picker for
+          full file access.
+        </p>
+      ) : null}
+      {source === 'cache' ? (
+        <p className="chat-file-preview__hint">
+          No live folder handle — edits save to the browser cache only until you use &quot;Choose folder&quot; again.
+        </p>
+      ) : null}
+      {loading ? <div className="chat-file-preview__loading">Loading…</div> : null}
+      {error ? <div className="chat-file-preview__error">{error}</div> : null}
+      {showEditor ? (
+        <div className="chat-file-preview__body">
+          <textarea
+            className="chat-file-preview__editor"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                e.preventDefault()
+                handleSave()
+              }
+            }}
+            spellCheck={false}
+            autoComplete="off"
+            aria-label="File contents"
+          />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+const CODING_MODE_KEY = 'ada-coding-mode-enabled'
+
+function readStoredCodingMode() {
+  try {
+    const v = localStorage.getItem(CODING_MODE_KEY)
+    if (v === '0') return false
+    if (v === '1') return true
+  } catch {
+    /* ignore */
+  }
+  return true
+}
+
+const COLOR_SCHEME_KEY = 'ada-color-scheme'
+
+function readStoredColorScheme() {
+  try {
+    const v = localStorage.getItem(COLOR_SCHEME_KEY)
+    if (v === 'light' || v === 'dark') return v
+  } catch {
+    /* ignore */
+  }
+  return 'dark'
+}
+
+const TERMINAL_EXPANDED_KEY = 'ada-terminal-expanded'
+
+/** VS Code–style host shell strip: one-line collapsed bar; expand for output + single-line input (uses POST /tools/shell). */
+function ChatTerminalPanel() {
+  const [expanded, setExpanded] = useState(() => {
+    try {
+      return localStorage.getItem(TERMINAL_EXPANDED_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const setExpandedPersist = useCallback((v) => {
+    setExpanded(v)
+    try {
+      if (v) localStorage.setItem(TERMINAL_EXPANDED_KEY, '1')
+      else localStorage.removeItem(TERMINAL_EXPANDED_KEY)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const [lines, setLines] = useState([])
+  const [cmd, setCmd] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [shellLabel, setShellLabel] = useState(null)
+  const outRef = useRef(null)
+
+  useEffect(() => {
+    if (!expanded) return
+    const el = outRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [lines, expanded])
+
+  const run = useCallback(async () => {
+    const c = cmd.trim()
+    if (!c || busy) return
+    setCmd('')
+    setLines((L) => [...L, { kind: 'in', text: c }])
+    setBusy(true)
+    try {
+      const r = await runHostShellCommand(c, 120)
+      if (r.shell) setShellLabel(r.shell)
+      if (!r.ok) {
+        const parts = [r.error, r.stderr].filter(Boolean)
+        const msg = parts.join('\n') || `Exited with code ${r.returncode ?? -1}.`
+        setLines((L) => [...L, { kind: 'err', text: msg }])
+      } else {
+        let out = ''
+        if (r.stdout) out += r.stdout
+        if (r.stderr) out += (out ? '\n' : '') + r.stderr
+        setLines((L) => [...L, { kind: 'out', text: out || `(exit ${r.returncode})` }])
+      }
+    } catch (e) {
+      setLines((L) => [...L, { kind: 'err', text: e?.message || String(e) }])
+    } finally {
+      setBusy(false)
+    }
+  }, [cmd, busy])
+
+  const shellSummary = shellLabel
+    ? shellLabel === 'powershell'
+      ? 'PowerShell'
+      : shellLabel === 'bash'
+        ? 'Bash'
+        : shellLabel
+    : 'Server shell'
+
+  if (!expanded) {
+    return (
+      <div className="chat-terminal chat-terminal--collapsed">
+        <button
+          type="button"
+          className="chat-terminal__bar"
+          onClick={() => setExpandedPersist(true)}
+          aria-expanded="false"
+        >
+          <span className="chat-terminal__chev" aria-hidden>
+            ▲
+          </span>
+          <span className="chat-terminal__label">TERMINAL</span>
+          <span className="chat-terminal__hint">
+            {shellSummary} on host — expand to run
+          </span>
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="chat-terminal chat-terminal--expanded">
+      <div className="chat-terminal__head">
+        <button
+          type="button"
+          className="chat-terminal__collapse"
+          onClick={() => setExpandedPersist(false)}
+          aria-expanded="true"
+          aria-label="Collapse terminal panel"
+        >
+          ▼
+        </button>
+        <span className="chat-terminal__title">TERMINAL</span>
+        <span className="chat-terminal__meta">{shellSummary}</span>
+        <button type="button" className="chat-terminal__clear" onClick={() => setLines([])}>
+          Clear
+        </button>
+      </div>
+      <div className="chat-terminal__out-wrap" ref={outRef}>
+        {lines.length === 0 ? (
+          <div className="chat-terminal__placeholder">
+            Runs one command per line on the API host (same cwd as the shell agent). Enable{' '}
+            <code>ADA_ENABLE_SHELL=1</code> on the server.
+          </div>
+        ) : (
+          lines.map((row, i) => (
+            <div key={i} className={`chat-terminal__line chat-terminal__line--${row.kind}`}>
+              {row.kind === 'in' ? <span className="chat-terminal__tag">$</span> : null}
+              <pre className="chat-terminal__pre">{row.text}</pre>
+            </div>
+          ))
+        )}
+      </div>
+      <div className="chat-terminal__input-row">
+        <span className="chat-terminal__prompt" aria-hidden>
+          &gt;
+        </span>
+        <input
+          type="text"
+          className="chat-terminal__input"
+          value={cmd}
+          onChange={(e) => setCmd(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              run()
+            }
+          }}
+          placeholder={busy ? 'Running…' : 'Command (Enter)'}
+          disabled={busy}
+          spellCheck={false}
+          autoComplete="off"
+          aria-label="Terminal command"
+        />
+      </div>
+    </div>
+  )
+}
+
 function App() {
+  const [colorScheme, setColorScheme] = useState(readStoredColorScheme)
   const [panel, setPanel] = useState('chats')
   const [chats, setChats] = useState([])
   const [currentChatId, setCurrentChatIdState] = useState(null)
@@ -247,8 +549,13 @@ function App() {
   const wsRef = useRef(null)
   const messagesEndRef = useRef(null)
   const fileInputRef = useRef(null)
+  const projectFolderInputRef = useRef(null)
+  const projectRootHandleRef = useRef(null)
   const addMenuRef = useRef(null)
+  const chatInputRef = useRef(null)
+  const mentionUiRef = useRef(null)
   const [addMenuOpen, setAddMenuOpen] = useState(false)
+  const [fileMention, setFileMention] = useState(null)
   const [webSearchMode, setWebSearchMode] = useState(() => {
     try {
       return sessionStorage.getItem('ada-web-search-mode') === '1'
@@ -256,21 +563,128 @@ function App() {
       return false
     }
   })
-  /** Absolute path on the API host — same idea as VS Code “Open Folder…”. */
-  const [workspaceFolder, setWorkspaceFolder] = useState(() => {
+  const [workspaceLocalLabel, setWorkspaceLocalLabel] = useState(() => {
     try {
-      return (
-        localStorage.getItem('ada-workspace-folder') ||
-        sessionStorage.getItem('ada-workspace-folder') ||
-        sessionStorage.getItem('ada-coding-project-path') ||
-        ''
-      )
+      return sessionStorage.getItem('ada-workspace-local-label') || ''
     } catch {
       return ''
     }
   })
-  const [workspaceFolderPickerOpen, setWorkspaceFolderPickerOpen] = useState(false)
-  const [workspaceFolderDraft, setWorkspaceFolderDraft] = useState('')
+  const [workspaceSnapshot, setWorkspaceSnapshot] = useState(() => {
+    try {
+      return sessionStorage.getItem('ada-workspace-snapshot') || ''
+    } catch {
+      return ''
+    }
+  })
+  const [workspaceRelPaths, setWorkspaceRelPaths] = useState(() => {
+    try {
+      const raw = sessionStorage.getItem('ada-workspace-paths')
+      const parsed = raw ? JSON.parse(raw) : null
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  })
+  const [projectImportBusy, setProjectImportBusy] = useState(false)
+  const [codingModeEnabled, setCodingModeEnabled] = useState(readStoredCodingMode)
+  const [filePreview, setFilePreview] = useState(null)
+
+  useEffect(() => {
+    mentionUiRef.current = fileMention
+  }, [fileMention])
+
+  useEffect(() => {
+    if (!codingModeEnabled || workspaceRelPaths.length === 0) setFileMention(null)
+  }, [codingModeEnabled, workspaceRelPaths.length])
+
+  const syncFileMentionFromCaret = useCallback(
+    (value, cursorPos, kind) => {
+      if (!codingModeEnabled || workspaceRelPaths.length === 0) {
+        setFileMention(null)
+        return
+      }
+      const m = getActiveFileMention(value, cursorPos)
+      if (!m) {
+        setFileMention(null)
+        return
+      }
+      const matches = rankProjectPathMatches(workspaceRelPaths, m.query, 14)
+      setFileMention((prev) => {
+        let highlight = 0
+        if (
+          kind === 'select' &&
+          prev &&
+          prev.start === m.start &&
+          prev.query === m.query &&
+          prev.matches.length === matches.length &&
+          prev.matches.every((p, i) => p === matches[i])
+        ) {
+          highlight = Math.min(prev.highlight, Math.max(0, matches.length - 1))
+        }
+        const prevSel = prev?.selectedPaths || []
+        const selectedPaths = prevSel.filter((p) => matches.includes(p))
+        return {
+          start: m.start,
+          query: m.query,
+          matches,
+          highlight,
+          selectedPaths,
+        }
+      })
+    },
+    [codingModeEnabled, workspaceRelPaths],
+  )
+
+  const bumpFileMentionHighlight = useCallback((delta) => {
+    setFileMention((mu) => {
+      if (!mu?.matches?.length) return mu
+      const n = mu.matches.length
+      let h = (mu.highlight + delta) % n
+      if (h < 0) h += n
+      return { ...mu, highlight: h }
+    })
+  }, [])
+
+  const toggleFileMentionSelect = useCallback((relPath) => {
+    setFileMention((fm) => {
+      if (!fm?.matches?.includes(relPath)) return fm
+      const cur = [...(fm.selectedPaths || [])]
+      const i = cur.indexOf(relPath)
+      if (i >= 0) cur.splice(i, 1)
+      else cur.push(relPath)
+      return { ...fm, selectedPaths: cur }
+    })
+  }, [])
+
+  const applyFileMentionMany = useCallback((paths) => {
+    const m = mentionUiRef.current
+    const el = chatInputRef.current
+    if (!m || !el) return
+    const unique = [...new Set(paths)].filter(Boolean)
+    if (!unique.length) return
+    const v = el.value
+    const cur = el.selectionStart ?? v.length
+    const before = v.slice(0, m.start)
+    const after = v.slice(cur)
+    const insertion = `${unique.map((p) => `@${p}`).join(' ')} `
+    const next = before + insertion + after
+    const caret = before.length + insertion.length
+    setInput(next)
+    setFileMention(null)
+    setTimeout(() => {
+      try {
+        el.focus()
+        el.setSelectionRange(caret, caret)
+      } catch {
+        /* ignore */
+      }
+    }, 0)
+  }, [])
+
+  const applyFileMention = useCallback((relPath) => {
+    applyFileMentionMany([relPath])
+  }, [applyFileMentionMany])
 
   const refreshChatList = useCallback(async () => {
     try {
@@ -364,6 +778,154 @@ function App() {
   useEffect(() => {
     if (panel === 'settings') refreshSettings()
   }, [panel, refreshSettings])
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', colorScheme)
+    try {
+      localStorage.setItem(COLOR_SCHEME_KEY, colorScheme)
+    } catch {
+      /* ignore */
+    }
+  }, [colorScheme])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CODING_MODE_KEY, codingModeEnabled ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
+  }, [codingModeEnabled])
+
+  useEffect(() => {
+    if (!codingModeEnabled) setFilePreview(null)
+  }, [codingModeEnabled])
+
+  useEffect(() => {
+    if (!codingModeEnabled || !workspaceLocalLabel?.trim()) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const rec = await loadProjectRootHandleRecord()
+        if (cancelled || !rec?.handle || rec.rootLabel !== workspaceLocalLabel.trim()) return
+        if (rec.handle.kind !== 'directory') return
+        if (!(await ensureDirectoryReadPermission(rec.handle))) return
+        projectRootHandleRef.current = rec.handle
+      } catch {
+        /* ignore */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [codingModeEnabled, workspaceLocalLabel])
+
+  const saveProjectFile = useCallback(
+    async (relPath, text) => {
+      let h = projectRootHandleRef.current
+      if (!h) {
+        try {
+          const rec = await loadProjectRootHandleRecord()
+          if (rec?.handle?.kind === 'directory' && rec.rootLabel === workspaceLocalLabel.trim()) {
+            if (await ensureDirectoryReadWritePermission(rec.handle)) {
+              projectRootHandleRef.current = rec.handle
+              h = rec.handle
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      if (h) {
+        if (!(await ensureDirectoryReadWritePermission(h))) {
+          return {
+            ok: false,
+            error: 'Allow read & write access for this folder when the browser prompts.',
+          }
+        }
+        const r = await writeProjectFileText(h, relPath, text)
+        if (r.ok) {
+          setFilePreview((p) => (p && p.relPath === relPath ? { ...p, body: text, source: 'handle' } : p))
+        }
+        return r
+      }
+      const label = workspaceLocalLabel.trim()
+      if (!label) return { ok: false, error: 'No project linked.' }
+      const okCache = await putPreviewFileText(label, relPath, text)
+      if (okCache) {
+        setFilePreview((p) => (p && p.relPath === relPath ? { ...p, body: text, source: 'cache' } : p))
+        return { ok: true, cacheOnly: true }
+      }
+      return { ok: false, error: 'Could not update cached copy.' }
+    },
+    [workspaceLocalLabel],
+  )
+
+  const openProjectFile = useCallback(
+    async (relPath) => {
+      if (!codingModeEnabled || !workspaceLocalLabel?.trim() || !relPath) return
+      setPanel('chats')
+      const title = `${workspaceLocalLabel}/${relPath.replace(/\\/g, '/')}`
+      setFilePreview({
+        relPath,
+        title,
+        body: '',
+        loading: true,
+        error: null,
+        source: null,
+      })
+      try {
+        let h = projectRootHandleRef.current
+        if (!h) {
+          try {
+            const rec = await loadProjectRootHandleRecord()
+            if (
+              rec?.handle?.kind === 'directory' &&
+              rec.rootLabel === workspaceLocalLabel.trim() &&
+              (await ensureDirectoryReadPermission(rec.handle))
+            ) {
+              projectRootHandleRef.current = rec.handle
+              h = rec.handle
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+        let body = ''
+        let source = null
+        if (h) {
+          body = (await readProjectFileText(h, relPath)) || ''
+          if (body) source = 'handle'
+        }
+        if (!body) {
+          body = (await getPreviewFileText(workspaceLocalLabel, relPath)) || ''
+          if (body) source = 'cache'
+        }
+        if (!body) {
+          setFilePreview({
+            relPath,
+            title,
+            body: '',
+            loading: false,
+            error:
+              'Could not read this file. Allow folder access if the browser asks, or re-import the project folder so previews are cached. Binary or unsupported types may not display as text.',
+            source: null,
+          })
+          return
+        }
+        setFilePreview({ relPath, title, body, loading: false, error: null, source })
+      } catch (e) {
+        setFilePreview({
+          relPath,
+          title,
+          body: '',
+          loading: false,
+          error: e?.message || 'Could not open file.',
+          source: null,
+        })
+      }
+    },
+    [codingModeEnabled, workspaceLocalLabel, setPanel],
+  )
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -480,41 +1042,136 @@ function App() {
     setAddMenuOpen(false)
   }
 
-  const persistWorkspaceFolder = (value) => {
-    const next = (value || '').trim()
-    setWorkspaceFolder(next)
+  const persistLocalProject = (label, snapshot, relPaths = []) => {
     try {
-      if (next) {
-        localStorage.setItem('ada-workspace-folder', next)
-        sessionStorage.setItem('ada-workspace-folder', next)
-        sessionStorage.removeItem('ada-coding-project-path')
-        sessionStorage.removeItem('ada-coding-project-mode')
-      } else {
-        localStorage.removeItem('ada-workspace-folder')
-        sessionStorage.removeItem('ada-workspace-folder')
-        sessionStorage.removeItem('ada-coding-project-path')
-        sessionStorage.removeItem('ada-coding-project-mode')
+      localStorage.removeItem('ada-workspace-folder')
+      sessionStorage.removeItem('ada-workspace-folder')
+      sessionStorage.removeItem('ada-coding-project-path')
+      sessionStorage.removeItem('ada-coding-project-mode')
+      sessionStorage.setItem('ada-workspace-local-label', label)
+      sessionStorage.setItem('ada-workspace-snapshot', snapshot)
+      const pathsJson = JSON.stringify(Array.isArray(relPaths) ? relPaths : [])
+      sessionStorage.setItem('ada-workspace-paths', pathsJson)
+      setWorkspaceLocalLabel(label)
+      setWorkspaceSnapshot(snapshot)
+      setWorkspaceRelPaths(Array.isArray(relPaths) ? relPaths : [])
+    } catch (e) {
+      try {
+        sessionStorage.removeItem('ada-workspace-snapshot')
+        sessionStorage.removeItem('ada-workspace-local-label')
+        sessionStorage.removeItem('ada-workspace-paths')
+      } catch {
+        /* ignore */
       }
+      if (e?.name === 'QuotaExceededError') {
+        alert(
+          'This folder snapshot is too large for browser storage. Try a smaller folder or exclude large generated directories.',
+        )
+      }
+    }
+  }
+
+  const clearProjectContext = () => {
+    const label = workspaceLocalLabel.trim()
+    if (label) clearPreviewCacheForRoot(label).catch(() => {})
+    projectRootHandleRef.current = null
+    clearProjectRootHandleRecord().catch(() => {})
+    setFilePreview(null)
+    setWorkspaceLocalLabel('')
+    setWorkspaceSnapshot('')
+    setWorkspaceRelPaths([])
+    try {
+      localStorage.removeItem('ada-workspace-folder')
+      sessionStorage.removeItem('ada-workspace-folder')
+      sessionStorage.removeItem('ada-workspace-snapshot')
+      sessionStorage.removeItem('ada-workspace-local-label')
+      sessionStorage.removeItem('ada-workspace-paths')
+      sessionStorage.removeItem('ada-coding-project-path')
+      sessionStorage.removeItem('ada-coding-project-mode')
     } catch {
       /* ignore */
     }
   }
 
-  const openWorkspaceFolderPicker = () => {
-    setWorkspaceFolderDraft(workspaceFolder)
-    setWorkspaceFolderPickerOpen(true)
+  useEffect(() => {
+    if (!workspaceSnapshot.trim() || !workspaceLocalLabel.trim()) return
+    if (workspaceRelPaths.length > 0) return
+    try {
+      const raw = sessionStorage.getItem('ada-workspace-paths')
+      const parsed = raw ? JSON.parse(raw) : null
+      if (Array.isArray(parsed) && parsed.length > 0) return
+    } catch {
+      /* fall through */
+    }
+    const parsed = parseRelPathsFromSnapshotMarkdown(workspaceSnapshot, workspaceLocalLabel)
+    if (parsed.length) {
+      setWorkspaceRelPaths(parsed)
+      try {
+        sessionStorage.setItem('ada-workspace-paths', JSON.stringify(parsed))
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [workspaceSnapshot, workspaceLocalLabel, workspaceRelPaths.length])
+
+  const pickLocalProjectFolder = async () => {
+    if (!codingModeEnabled) return
+    if (canUseDirectoryPicker()) {
+      try {
+        const handle = await window.showDirectoryPicker()
+        const rootName = handle.name || 'project'
+        projectRootHandleRef.current = handle
+        setProjectImportBusy(true)
+        const { snapshot, relPaths } = await buildSnapshotFromDirectoryHandle(handle, rootName)
+        if (snapshot) {
+          try {
+            persistLocalProject(rootName, snapshot, relPaths)
+          } catch {
+            /* quota handled inside */
+          }
+        }
+        saveProjectRootHandleRecord(handle, rootName).catch(() => {})
+        return
+      } catch (e) {
+        if (e?.name === 'AbortError') return
+        console.warn(e)
+      } finally {
+        setProjectImportBusy(false)
+      }
+    }
+    projectRootHandleRef.current = null
+    projectFolderInputRef.current?.click()
   }
 
-  const confirmWorkspaceFolder = () => {
-    persistWorkspaceFolder(workspaceFolderDraft)
-    setWorkspaceFolderPickerOpen(false)
+  const onProjectFolderInputChange = async (e) => {
+    if (!codingModeEnabled) {
+      e.target.value = ''
+      return
+    }
+    const fl = e.target.files
+    e.target.value = ''
+    if (!fl?.length) return
+    clearProjectRootHandleRecord().catch(() => {})
+    setProjectImportBusy(true)
+    try {
+      const { snapshot, relPaths } = await buildSnapshotFromFileList(fl)
+      const root = fl[0].webkitRelativePath.split(/[/\\]/)[0] || 'project'
+      projectRootHandleRef.current = null
+      if (snapshot) {
+        try {
+          persistLocalProject(root, snapshot, relPaths)
+        } catch {
+          /* quota handled inside */
+        }
+      }
+    } catch (err) {
+      alert(err?.message || 'Could not read that folder.')
+    } finally {
+      setProjectImportBusy(false)
+    }
   }
 
-  const closeWorkspaceFolder = () => {
-    persistWorkspaceFolder('')
-    setWorkspaceFolderPickerOpen(false)
-    setWorkspaceFolderDraft('')
-  }
+  const workspaceDisplayLabel = () => workspaceLocalLabel.trim() || ''
 
   const handleSend = async (opts = {}) => {
     const raw = input.trim()
@@ -522,12 +1179,13 @@ function App() {
     const extraWs =
       explicitWs || (webSearchMode && raw ? raw : '')
     const filesToSend = [...attachments]
-    const pathForCoding = workspaceFolder.trim()
-    const workspaceContextActive = pathForCoding.length > 0
-    if (!raw && filesToSend.length === 0 && !extraWs && !workspaceContextActive) {
+    const cSnap = workspaceSnapshot.trim()
+    const projectContextActive = codingModeEnabled && cSnap.length > 0
+    if (!raw && filesToSend.length === 0 && !extraWs && !projectContextActive) {
       return
     }
     setInput('')
+    setFileMention(null)
     setAttachments([])
 
     let displayText = raw
@@ -536,9 +1194,8 @@ function App() {
     if (explicitWs && !webSearchMode) {
       displayText = displayText ? `${displayText} · Web: ${explicitWs}` : `Web search: ${explicitWs}`
     }
-    const cPath = pathForCoding
-    if (workspaceContextActive && cPath) {
-      const label = workspaceBasename(cPath) || cPath
+    if (projectContextActive) {
+      const label = workspaceDisplayLabel() || 'project'
       displayText = displayText
         ? `${displayText} · Project: ${label}`
         : `Project: ${label}`
@@ -566,8 +1223,8 @@ function App() {
           filesToSend,
           chatId,
           extraWs.trim() || null,
-          workspaceContextActive,
-          cPath || null,
+          projectContextActive,
+          projectContextActive ? cSnap || null : null,
         )
         appendMessage(reply, false)
         await appendChatLog('assistant', reply)
@@ -606,13 +1263,13 @@ function App() {
           raw ||
           (extraWs
             ? ''
-            : workspaceContextActive && cPath
+            : projectContextActive
               ? ''
               : 'Please summarize or answer based on the attached documents.')
         const streamResult = await sendMessageStream(streamMsg, null, chatId, {
             webSearchQuery: extraWs.trim() || null,
-            codingMode: workspaceContextActive,
-            codingProjectPath: cPath || null,
+            codingMode: projectContextActive,
+            codingProjectSnapshot: projectContextActive ? cSnap || null : null,
             onChunk: (delta) => setLiveReply((prev) => (prev || '') + delta),
             onStatus: (d) => {
               if (d.phase === 'done') return
@@ -662,6 +1319,38 @@ function App() {
   }
 
   const handleKeyDown = (e) => {
+    const mu = mentionUiRef.current
+    if (mu && mu.matches.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        bumpFileMentionHighlight(1)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        bumpFileMentionHighlight(-1)
+        return
+      }
+      if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault()
+        const rel = mu.matches[mu.highlight]
+        if (rel) toggleFileMentionSelect(rel)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        const picked = mu.selectedPaths?.length
+          ? mu.selectedPaths
+          : [mu.matches[mu.highlight]].filter(Boolean)
+        applyFileMentionMany(picked)
+        return
+      }
+    }
+    if (mu && e.key === 'Escape') {
+      e.preventDefault()
+      setFileMention(null)
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend({})
@@ -670,350 +1359,211 @@ function App() {
 
   return (
     <div className="app">
-      <header className="titlebar">
-        <div className="titlebar-brand">
-          <img src="/Ada.jpg" alt="" className="titlebar-logo" />
-          <span className="titlebar-title">Ada</span>
+      <header className="app-navbar">
+        <div className="navbar-brand">
+          <img src="/Ada.jpg" alt="" className="navbar-logo" />
+          <span className="navbar-title">Ada</span>
         </div>
-      </header>
-      <div className="app-body">
-        <aside className="sidebar">
-          <div className="sidebar-tabs" role="tablist">
+        <div className="navbar-center">
+          <button
+            type="button"
+            className="navbar-new-chat"
+            title="New chat"
+            aria-label="New chat"
+            onClick={async () => {
+              try {
+                const chatId = await createNewChat()
+                setCurrentChatIdState(chatId)
+                setMessages([])
+                setPanel('chats')
+                await refreshChatList()
+              } catch (e) {
+                console.error(e)
+              }
+            }}
+          >
+            {NAV_NEW_CHAT_ICON}
+          </button>
+        </div>
+        <nav className="navbar-nav" aria-label="Main navigation">
+          <div className="navbar-chats-wrap">
             <button
               type="button"
-              className={`sidebar-tab ${panel === 'chats' ? 'active' : ''}`}
+              className={`navbar-link${panel === 'chats' ? ' navbar-link--active' : ''}`}
               onClick={() => setPanel('chats')}
-              aria-selected={panel === 'chats'}
+              aria-current={panel === 'chats' ? 'page' : undefined}
+              aria-haspopup="true"
             >
               Chats
             </button>
-            <button
-              type="button"
-              className={`sidebar-tab ${panel === 'activity' ? 'active' : ''}`}
-              onClick={() => setPanel('activity')}
-              aria-selected={panel === 'activity'}
-            >
-              Activity
-            </button>
-            <button
-              type="button"
-              className={`sidebar-tab ${panel === 'settings' ? 'active' : ''}`}
-              onClick={() => setPanel('settings')}
-              aria-selected={panel === 'settings'}
-            >
-              Settings
-            </button>
-          </div>
-          <div className="sidebar-panel sidebar-panel--chats" style={{ display: panel === 'chats' ? 'flex' : 'none' }}>
-            <div className="repo-context-card" aria-label="Project context">
-              <div className="repo-context-card__head">
-                <span className="repo-context-card__pulse" aria-hidden />
-                <h2 className="repo-context-card__title">Project context</h2>
-              </div>
-              <p className="repo-context-card__subtitle">Folder on the server for coding answers</p>
-              <div className="repo-context-card__body">
-                {!workspaceFolder.trim() && !workspaceFolderPickerOpen ? (
-                  <div className="repo-context-empty">
-                    <p className="repo-context-empty__hint">
-                      Link a folder so Ada can read its structure and files when you ask coding questions.
-                    </p>
-                    <button type="button" className="repo-context-btn repo-context-btn--primary" onClick={openWorkspaceFolderPicker}>
-                      Link folder
-                    </button>
-                  </div>
-                ) : null}
-                {!workspaceFolder.trim() && workspaceFolderPickerOpen ? (
-                  <div className="repo-context-form">
-                    <p className="repo-context-form__help">Absolute path on the machine running the API.</p>
-                    <input
-                      type="text"
-                      className="repo-context-input"
-                      placeholder="/home/you/repo or E:\path\to\repo"
-                      value={workspaceFolderDraft}
-                      onChange={(e) => setWorkspaceFolderDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault()
-                          confirmWorkspaceFolder()
-                        }
-                        if (e.key === 'Escape') {
-                          setWorkspaceFolderPickerOpen(false)
-                          setWorkspaceFolderDraft('')
-                        }
-                      }}
-                      autoFocus
-                      autoComplete="off"
-                    />
-                    <div className="repo-context-form__actions">
-                      <button type="button" className="repo-context-btn repo-context-btn--primary" onClick={confirmWorkspaceFolder}>
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        className="repo-context-btn repo-context-btn--ghost"
-                        onClick={() => {
-                          setWorkspaceFolderPickerOpen(false)
-                          setWorkspaceFolderDraft('')
-                        }}
+            <div className="navbar-chats-dropdown" role="region" aria-label="Chat history">
+              <div className="navbar-chats-dropdown-inner">
+                <div className="navbar-chats-dropdown-header">Recent chats</div>
+                <div className="navbar-chats-list">
+                  {chats.length === 0 ? (
+                    <p className="navbar-chats-empty">No conversations yet.</p>
+                  ) : (
+                    chats.map((chat) => (
+                      <div
+                        key={chat.id}
+                        className={`chat-history-item-wrap navbar-chats-item ${currentChatId === chat.id ? 'active' : ''}`}
                       >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-                {workspaceFolder.trim() ? (
-                  <div className="repo-context-linked">
-                    <div className="repo-context-linked__row" title={workspaceFolder}>
-                      <span className="repo-context-linked__icon-wrap" aria-hidden>
-                        {REPO_FOLDER_ICON}
-                      </span>
-                      <div className="repo-context-linked__meta">
-                        <span className="repo-context-linked__name">{workspaceBasename(workspaceFolder) || workspaceFolder}</span>
-                        <span className="repo-context-linked__path">{workspaceFolder}</span>
-                      </div>
-                      <div className="repo-context-linked__actions">
                         <button
                           type="button"
-                          className="repo-context-icon-btn"
-                          title="Change folder"
-                          aria-label="Change linked folder"
-                          onClick={openWorkspaceFolderPicker}
+                          className="chat-history-item"
+                          onClick={() => {
+                            selectChat(chat.id)
+                            setPanel('chats')
+                          }}
                         >
-                          Edit
+                          {CHAT_ICON}
+                          <span className="chat-history-title" title={escapeHtml(chat.title)}>
+                            {chat.title}
+                          </span>
                         </button>
                         <button
                           type="button"
-                          className="repo-context-icon-btn"
-                          title="Unlink folder"
-                          aria-label="Unlink folder"
-                          onClick={closeWorkspaceFolder}
-                        >
-                          Clear
-                        </button>
-                      </div>
-                    </div>
-                    {workspaceFolderPickerOpen ? (
-                      <div className="repo-context-form repo-context-form--nested">
-                        <input
-                          type="text"
-                          className="repo-context-input"
-                          value={workspaceFolderDraft}
-                          onChange={(e) => setWorkspaceFolderDraft(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault()
-                              confirmWorkspaceFolder()
-                            }
-                            if (e.key === 'Escape') {
-                              setWorkspaceFolderPickerOpen(false)
-                              setWorkspaceFolderDraft(workspaceFolder)
+                          className="chat-history-delete"
+                          aria-label="Delete chat"
+                          onClick={async (e) => {
+                            e.stopPropagation()
+                            if (!confirm('Delete this chat?')) return
+                            try {
+                              await deleteChat(chat.id)
+                              if (currentChatId === chat.id) {
+                                setCurrentChatIdState(null)
+                                setMessages([])
+                              }
+                              await refreshChatList()
+                            } catch (err) {
+                              console.error(err)
+                              alert(err?.message || 'Could not delete chat.')
                             }
                           }}
-                          autoFocus
-                          autoComplete="off"
-                        />
-                        <div className="repo-context-form__actions">
-                          <button type="button" className="repo-context-btn repo-context-btn--primary" onClick={confirmWorkspaceFolder}>
-                            Save
-                          </button>
-                          <button
-                            type="button"
-                            className="repo-context-btn repo-context-btn--ghost"
-                            onClick={() => {
-                              setWorkspaceFolderPickerOpen(false)
-                              setWorkspaceFolderDraft(workspaceFolder)
-                            }}
-                          >
-                            Cancel
-                          </button>
-                        </div>
+                        >
+                          ×
+                        </button>
                       </div>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-            <button
-              type="button"
-              className="chat-new-btn"
-              onClick={async () => {
-                try {
-                  const chatId = await createNewChat()
-                  setCurrentChatIdState(chatId)
-                  setMessages([])
-                  await refreshChatList()
-                } catch (e) {
-                  console.error(e)
-                }
-              }}
-            >
-              + New chat
-            </button>
-            <div className="sidebar-list chat-history-list">
-              {chats.length === 0 ? (
-                <p className="chat-history-empty">No conversations yet. Start chatting to see them here.</p>
-              ) : (
-                chats.map((chat) => (
-                  <div
-                    key={chat.id}
-                    className={`chat-history-item-wrap ${currentChatId === chat.id ? 'active' : ''}`}
-                  >
-                    <button
-                      type="button"
-                      className="chat-history-item"
-                      onClick={() => selectChat(chat.id)}
-                    >
-                      {CHAT_ICON}
-                      <span className="chat-history-title" title={escapeHtml(chat.title)}>
-                        {chat.title}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      className="chat-history-delete"
-                      aria-label="Delete chat"
-                      onClick={async (e) => {
-                        e.stopPropagation()
-                        if (!confirm('Delete this chat?')) return
-                        try {
-                          await deleteChat(chat.id)
-                          if (currentChatId === chat.id) {
-                            setCurrentChatIdState(null)
-                            setMessages([])
-                          }
-                          await refreshChatList()
-                        } catch (err) {
-                          console.error(err)
-                          alert(err?.message || 'Could not delete chat.')
-                        }
-                      }}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-          <div className="sidebar-panel" style={{ display: panel === 'activity' ? 'flex' : 'none' }}>
-            <div className="sidebar-list activity-list">
-              <p className="activity-empty">No actions yet. Actions the chatbot takes will appear here.</p>
-            </div>
-          </div>
-          <div className="sidebar-panel" style={{ display: panel === 'settings' ? 'flex' : 'none' }}>
-            <div className="sidebar-list settings-panel">
-              <div className="settings-section">
-                <label className="settings-label">Storage location</label>
-                <p className="settings-description">Where chat logs are saved.</p>
-                <div className="settings-storage-row">
-                  <input
-                    type="text"
-                    readOnly
-                    className="settings-storage-input"
-                    value={storagePath}
-                    aria-label="Chats storage path"
-                  />
-                  <button type="button" className="settings-storage-btn" onClick={handleStorageChange}>
-                    Change
-                  </button>
-                </div>
-              </div>
-              <div className="settings-section">
-                <label className="settings-label">Model</label>
-                <p className="settings-description">LLM used for chat and agents.</p>
-                <select
-                  className="settings-model-select"
-                  value={modelProvider}
-                  onChange={handleModelChange}
-                  aria-label="Model provider"
-                >
-                  <option value="openai">OpenAI (GPT-4o)</option>
-                  <option value="xai">xAI (Grok)</option>
-                </select>
-              </div>
-              <div className="settings-section">
-                <label className="settings-label">Google Calendar + Gmail</label>
-                {googleAuth.connected ? (
-                  <div className="settings-auth-connected settings-auth-connected--col">
-                    <div className="settings-auth-row">
-                      <span className="settings-auth-pill">Connected</span>
-                      <span className="settings-auth-user">
-                        {googleAuth.user?.email || googleAuth.user?.name || 'Google account'}
-                      </span>
-                    </div>
-                    {gmailStatus?.ok ? (
-                      <div className="settings-gmail-line">
-                        Gmail · {gmailStatus.emailAddress || 'linked'}
-                        {gmailStatus.messagesTotal != null ? ` · ${gmailStatus.messagesTotal} messages` : ''}
-                      </div>
-                    ) : gmailStatus && !gmailStatus.ok ? (
-                      <div className="settings-gmail-line settings-gmail-line--warn">{gmailStatus.error}</div>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div className="settings-auth-connected">
-                    <span className="settings-auth-pill settings-auth-pill--idle">
-                      {googleAuth.configured ? 'Not connected' : 'Unavailable'}
-                    </span>
-                  </div>
-                )}
-                <div className="settings-auth-actions">
-                  {!googleAuth.connected ? (
-                    <button
-                      type="button"
-                      className="settings-storage-btn"
-                      disabled={!googleAuth.configured}
-                      title={!googleAuth.configured ? 'OAuth is not configured on the server' : undefined}
-                      onClick={() => {
-                        window.location.href = getGoogleAuthLoginUrl('/settings')
-                      }}
-                    >
-                      Sign in with Google
-                    </button>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="settings-storage-btn"
-                        disabled={googleAuthBusy}
-                        onClick={async () => {
-                          setGoogleAuthBusy(true)
-                          try {
-                            await googleLogout()
-                            await refreshGoogleAuth()
-                          } finally {
-                            setGoogleAuthBusy(false)
-                          }
-                        }}
-                      >
-                        Log out
-                      </button>
-                      <button
-                        type="button"
-                        className="settings-storage-btn"
-                        disabled={googleAuthBusy}
-                        onClick={async () => {
-                          if (!confirm('Disconnect Google account and revoke stored access?')) return
-                          setGoogleAuthBusy(true)
-                          try {
-                            await googleDisconnect()
-                            await refreshGoogleAuth()
-                          } finally {
-                            setGoogleAuthBusy(false)
-                          }
-                        }}
-                      >
-                        Disconnect
-                      </button>
-                    </>
+                    ))
                   )}
                 </div>
               </div>
             </div>
           </div>
+          <button
+            type="button"
+            className={`navbar-link${panel === 'activity' ? ' navbar-link--active' : ''}`}
+            onClick={() => setPanel('activity')}
+            aria-current={panel === 'activity' ? 'page' : undefined}
+          >
+            Activity
+          </button>
+          <button
+            type="button"
+            className={`navbar-link${panel === 'settings' ? ' navbar-link--active' : ''}`}
+            onClick={() => setPanel('settings')}
+            aria-current={panel === 'settings' ? 'page' : undefined}
+          >
+            Settings
+          </button>
+        </nav>
+      </header>
+      <div className="app-body">
+        {codingModeEnabled ? (
+        <aside className="sidebar sidebar--explorer" aria-label="Project explorer">
+          <div className="sidebar-panel sidebar-panel--explorer">
+            <div className="repo-context-card" aria-label="Project context">
+              <div className="repo-context-card__head">
+                <span className="repo-context-card__pulse" aria-hidden />
+                <h2 className="repo-context-card__title">Project context</h2>
+              </div>
+              <p className="repo-context-card__subtitle">
+                Open a folder from your computer. Files are read in the browser and an index is sent to the model.
+              </p>
+              <input
+                ref={projectFolderInputRef}
+                type="file"
+                style={{ display: 'none' }}
+                onChange={onProjectFolderInputChange}
+                {...{ webkitdirectory: true, directory: true, multiple: true }}
+              />
+              <div className="repo-context-card__body">
+                {!workspaceSnapshot.trim() ? (
+                  <div className="repo-context-empty">
+                    <p className="repo-context-empty__hint">
+                      Choose a folder — Ada reads files in your browser and sends an index to the model (no path
+                      copy-paste needed).
+                    </p>
+                    <button
+                      type="button"
+                      className="repo-context-btn repo-context-btn--primary"
+                      onClick={() => pickLocalProjectFolder()}
+                      disabled={projectImportBusy || sending}
+                    >
+                      {projectImportBusy ? 'Reading folder…' : 'Open folder'}
+                    </button>
+                  </div>
+                ) : null}
+                {workspaceSnapshot.trim() ? (
+                  <div className="repo-context-linked">
+                    <div className="repo-context-linked__row" title={workspaceLocalLabel}>
+                      <span className="repo-context-linked__icon-wrap" aria-hidden>
+                        {REPO_FOLDER_ICON}
+                      </span>
+                      <div className="repo-context-linked__meta">
+                        <span className="repo-context-linked__name">{workspaceDisplayLabel() || 'Project'}</span>
+                        <span className="repo-context-linked__path">
+                          Index from this browser — folder read locally, not on the server disk.
+                        </span>
+                      </div>
+                      <div className="repo-context-linked__actions">
+                        <button
+                          type="button"
+                          className="repo-context-icon-btn"
+                          title="Pick another folder"
+                          aria-label="Pick another folder"
+                          onClick={() => pickLocalProjectFolder()}
+                          disabled={projectImportBusy}
+                        >
+                          Change
+                        </button>
+                        <button
+                          type="button"
+                          className="repo-context-icon-btn"
+                          title="Remove project"
+                          aria-label="Remove project"
+                          onClick={clearProjectContext}
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                    {workspaceRelPaths.length > 0 ? (
+                      <ProjectFileTree
+                        rootLabel={workspaceLocalLabel}
+                        relPaths={workspaceRelPaths}
+                        onFileOpen={openProjectFile}
+                      />
+                    ) : (
+                      <p className="repo-context-tree-empty">
+                        File list not loaded. Re-open the folder to show the explorer.
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
         </aside>
+        ) : null}
         <div className="main-column">
+        {panel === 'chats' ? (
         <div className="chat-container">
+          <ChatFilePreview
+            preview={filePreview}
+            onClose={() => setFilePreview(null)}
+            onSave={codingModeEnabled ? saveProjectFile : null}
+          />
           <div className="chat-messages">
             {messages.map((msg, i) => (
               <div key={i} className={`msg ${msg.role === 'user' ? 'msg-user' : msg.role === 'tool' ? 'msg-tool' : 'msg-bot'}`}>
@@ -1141,46 +1691,304 @@ function App() {
                 ) : null}
               </div>
               <input type="file" ref={fileInputRef} style={{ display: 'none' }} multiple onChange={onFileChange} />
-              <textarea
-                id="chat-input"
-                placeholder={
-                  workspaceFolder.trim()
-                    ? 'Message Ada… (linked project included when relevant)'
-                    : webSearchMode
-                      ? 'Message Ada… (each send uses the web: top results inform the reply)'
-                      : 'Message Ada…'
-                }
-                rows={1}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                disabled={sending}
-              />
+              <div className="chat-input-composer">
+                {fileMention && codingModeEnabled && workspaceRelPaths.length > 0 ? (
+                  <div
+                    id="chat-file-mention-list"
+                    className="chat-file-mention"
+                    role="listbox"
+                    aria-label="Project files"
+                  >
+                    {fileMention.matches.length === 0 ? (
+                      <div className="chat-file-mention-empty" role="option">
+                        No matching files
+                      </div>
+                    ) : (
+                      <>
+                        {fileMention.selectedPaths?.length > 0 ? (
+                          <div className="chat-file-mention-hint">
+                            {fileMention.selectedPaths.length} selected — Enter to insert · Space to toggle row ·
+                            Ctrl/⌘-click rows
+                          </div>
+                        ) : (
+                          <div className="chat-file-mention-hint chat-file-mention-hint--subtle">
+                            Ctrl/⌘-click to select multiple, Enter to insert · click inserts one
+                          </div>
+                        )}
+                        {fileMention.matches.map((rel, i) => {
+                          const picked = fileMention.selectedPaths?.includes(rel)
+                          return (
+                            <button
+                              key={rel}
+                              type="button"
+                              role="option"
+                              id={`chat-file-mention-${i}`}
+                              aria-selected={picked || i === fileMention.highlight}
+                              className={`chat-file-mention-item${i === fileMention.highlight ? ' chat-file-mention-item--active' : ''}${picked ? ' chat-file-mention-item--picked' : ''}`}
+                              onMouseEnter={() =>
+                                setFileMention((fm) => (fm ? { ...fm, highlight: i } : null))
+                              }
+                              onMouseDown={(ev) => {
+                                ev.preventDefault()
+                                if (ev.ctrlKey || ev.metaKey) {
+                                  toggleFileMentionSelect(rel)
+                                } else {
+                                  applyFileMention(rel)
+                                }
+                              }}
+                            >
+                              {picked ? (
+                                <span className="chat-file-mention-check" aria-hidden>
+                                  ✓
+                                </span>
+                              ) : (
+                                <span className="chat-file-mention-check-spacer" aria-hidden />
+                              )}
+                              <span className="chat-file-mention-path">{rel}</span>
+                            </button>
+                          )
+                        })}
+                      </>
+                    )}
+                  </div>
+                ) : null}
+                <textarea
+                  ref={chatInputRef}
+                  id="chat-input"
+                  placeholder={
+                    codingModeEnabled && workspaceSnapshot.trim()
+                      ? 'Message Ada… @file — Ctrl+click several, Enter to insert'
+                      : webSearchMode
+                        ? 'Message Ada… (each send uses the web: top results inform the reply)'
+                        : 'Message Ada…'
+                  }
+                  rows={1}
+                  value={input}
+                  onChange={(e) => {
+                    setInput(e.target.value)
+                    syncFileMentionFromCaret(e.target.value, e.target.selectionStart, 'input')
+                  }}
+                  onSelect={(e) => {
+                    syncFileMentionFromCaret(e.target.value, e.target.selectionStart, 'select')
+                  }}
+                  onClick={(e) => {
+                    syncFileMentionFromCaret(e.target.value, e.target.selectionStart, 'select')
+                  }}
+                  onKeyDown={handleKeyDown}
+                  disabled={sending}
+                  autoComplete="off"
+                  aria-autocomplete={fileMention ? 'list' : undefined}
+                  aria-controls={fileMention ? 'chat-file-mention-list' : undefined}
+                  aria-expanded={Boolean(
+                    fileMention && codingModeEnabled && workspaceRelPaths.length > 0,
+                  )}
+                />
+              </div>
               <button type="button" id="chat-send" onClick={() => handleSend({})} disabled={sending}>
                 Send
               </button>
             </div>
           </div>
+          <ChatTerminalPanel />
         </div>
+        ) : null}
+        {panel === 'activity' ? (
+          <div className="main-panel main-panel--activity">
+            <div className="main-panel-inner activity-list">
+              <p className="activity-empty">No actions yet. Actions the chatbot takes will appear here.</p>
+            </div>
+          </div>
+        ) : null}
+        {panel === 'settings' ? (
+          <div className="main-panel main-panel--settings">
+            <div className="main-panel-inner settings-panel">
+              <div className="settings-section">
+                <label className="settings-label">Appearance</label>
+                <p className="settings-description">Interface color scheme.</p>
+                <div className="settings-theme-switch" role="group" aria-label="Color scheme">
+                  <button
+                    type="button"
+                    className={`settings-theme-option${colorScheme === 'dark' ? ' settings-theme-option--active' : ''}`}
+                    onClick={() => setColorScheme('dark')}
+                    aria-pressed={colorScheme === 'dark'}
+                  >
+                    Dark
+                  </button>
+                  <button
+                    type="button"
+                    className={`settings-theme-option${colorScheme === 'light' ? ' settings-theme-option--active' : ''}`}
+                    onClick={() => setColorScheme('light')}
+                    aria-pressed={colorScheme === 'light'}
+                  >
+                    Light
+                  </button>
+                </div>
+              </div>
+              <div className="settings-section">
+                <label className="settings-label">Coding mode</label>
+                <p className="settings-description">
+                  When enabled, the project explorer is shown and you can open a folder to send its index with
+                  messages. When disabled, chat runs without project context.
+                </p>
+                <div className="settings-theme-switch" role="group" aria-label="Coding mode">
+                  <button
+                    type="button"
+                    className={`settings-theme-option${codingModeEnabled ? ' settings-theme-option--active' : ''}`}
+                    onClick={() => setCodingModeEnabled(true)}
+                    aria-pressed={codingModeEnabled}
+                  >
+                    On
+                  </button>
+                  <button
+                    type="button"
+                    className={`settings-theme-option${!codingModeEnabled ? ' settings-theme-option--active' : ''}`}
+                    onClick={() => setCodingModeEnabled(false)}
+                    aria-pressed={!codingModeEnabled}
+                  >
+                    Off
+                  </button>
+                </div>
+              </div>
+              <div className="settings-section">
+                <label className="settings-label">Storage location</label>
+                <p className="settings-description">Where chat logs are saved.</p>
+                <div className="settings-storage-row">
+                  <input
+                    type="text"
+                    readOnly
+                    className="settings-storage-input"
+                    value={storagePath}
+                    aria-label="Chats storage path"
+                  />
+                  <button type="button" className="settings-storage-btn" onClick={handleStorageChange}>
+                    Change
+                  </button>
+                </div>
+              </div>
+              <div className="settings-section">
+                <label className="settings-label">Model</label>
+                <p className="settings-description">LLM used for chat and agents.</p>
+                <select
+                  className="settings-model-select"
+                  value={modelProvider}
+                  onChange={handleModelChange}
+                  aria-label="Model provider"
+                >
+                  <option value="openai">OpenAI (GPT-4o)</option>
+                  <option value="xai">xAI (Grok)</option>
+                </select>
+              </div>
+              <div className="settings-section">
+                <label className="settings-label">Google Calendar + Gmail</label>
+                {googleAuth.connected ? (
+                  <div className="settings-auth-connected settings-auth-connected--col">
+                    <div className="settings-auth-row">
+                      <span className="settings-auth-pill">Connected</span>
+                      <span className="settings-auth-user">
+                        {googleAuth.user?.email || googleAuth.user?.name || 'Google account'}
+                      </span>
+                    </div>
+                    {gmailStatus?.ok ? (
+                      <div className="settings-gmail-line">
+                        Gmail · {gmailStatus.emailAddress || 'linked'}
+                        {gmailStatus.messagesTotal != null ? ` · ${gmailStatus.messagesTotal} messages` : ''}
+                      </div>
+                    ) : gmailStatus && !gmailStatus.ok ? (
+                      <div className="settings-gmail-line settings-gmail-line--warn">{gmailStatus.error}</div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="settings-auth-connected">
+                    <span className="settings-auth-pill settings-auth-pill--idle">
+                      {googleAuth.configured ? 'Not connected' : 'Unavailable'}
+                    </span>
+                  </div>
+                )}
+                <div className="settings-auth-actions">
+                  {!googleAuth.connected ? (
+                    <button
+                      type="button"
+                      className="settings-storage-btn"
+                      disabled={!googleAuth.configured}
+                      title={!googleAuth.configured ? 'OAuth is not configured on the server' : undefined}
+                      onClick={() => {
+                        window.location.href = getGoogleAuthLoginUrl('/settings')
+                      }}
+                    >
+                      Sign in with Google
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="settings-storage-btn"
+                        disabled={googleAuthBusy}
+                        onClick={async () => {
+                          setGoogleAuthBusy(true)
+                          try {
+                            await googleLogout()
+                            await refreshGoogleAuth()
+                          } finally {
+                            setGoogleAuthBusy(false)
+                          }
+                        }}
+                      >
+                        Log out
+                      </button>
+                      <button
+                        type="button"
+                        className="settings-storage-btn"
+                        disabled={googleAuthBusy}
+                        onClick={async () => {
+                          if (!confirm('Disconnect Google account and revoke stored access?')) return
+                          setGoogleAuthBusy(true)
+                          try {
+                            await googleDisconnect()
+                            await refreshGoogleAuth()
+                          } finally {
+                            setGoogleAuthBusy(false)
+                          }
+                        }}
+                      >
+                        Disconnect
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
         <footer className="app-context-footer" role="status">
           <div className="app-context-footer__cluster">
-            {workspaceFolder.trim() ? (
+            {!codingModeEnabled ? (
+              <span className="app-context-footer__idle">Coding mode is off — turn it on in Settings to use a project.</span>
+            ) : workspaceSnapshot.trim() ? (
               <>
-                <span className="app-context-footer__badge" title={workspaceFolder}>
+                <span className="app-context-footer__badge" title={workspaceDisplayLabel()}>
                   {REPO_FOLDER_ICON}
-                  <span className="app-context-footer__badge-text">{workspaceBasename(workspaceFolder)}</span>
+                  <span className="app-context-footer__badge-text">{workspaceDisplayLabel()}</span>
                 </span>
-                <span className="app-context-footer__path" title={workspaceFolder}>
-                  {workspaceFolder}
+                <span className="app-context-footer__path" title="Browser-built index">
+                  Local folder (browser index)
                 </span>
               </>
             ) : (
-              <span className="app-context-footer__idle">No project folder linked</span>
+              <span className="app-context-footer__idle">No project linked</span>
             )}
           </div>
-          <button type="button" className="app-context-footer__linkish" onClick={openWorkspaceFolderPicker}>
-            {workspaceFolder.trim() ? 'Change folder' : 'Link folder'}
-          </button>
+          <div className="app-context-footer__actions">
+            {codingModeEnabled ? (
+              <button
+                type="button"
+                className="app-context-footer__linkish"
+                onClick={() => pickLocalProjectFolder()}
+                disabled={projectImportBusy || sending}
+              >
+                {projectImportBusy ? 'Reading…' : 'Open folder'}
+              </button>
+            ) : null}
+          </div>
         </footer>
         </div>
       </div>

@@ -34,8 +34,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
-from tools.project_repository import build_repository_snapshot
-
 from config import (
     get_chat_history_limit,
     get_grep_root,
@@ -185,9 +183,7 @@ class SendMessageRequest(BaseModel):
     chat_id: Optional[str] = None
     web_search_query: Optional[str] = None
     coding_mode: bool = False
-    coding_project_path: Optional[str] = None
-    """Pre-built index + excerpts from the browser (open folder); wins over path when set."""
-    coding_project_snapshot: Optional[str] = None
+    coding_project_snapshot: Optional[str] = None  # browser-built index from open folder
 
 
 class ChatbotResponseRequest(BaseModel):
@@ -196,13 +192,10 @@ class ChatbotResponseRequest(BaseModel):
     web_search_query: Optional[str] = None
 
 
-def _prepare_coding_project_context(coding_mode: bool, path: Optional[str]) -> str:
+def _prepare_coding_project_context(coding_mode: bool, snapshot: Optional[str] = None) -> str:
     if not coding_mode:
         return ""
-    p = (path or "").strip()
-    if not p:
-        return ""
-    return build_repository_snapshot(p)
+    return (snapshot or "").strip()
 
 
 class AppendChatLogRequest(BaseModel):
@@ -313,7 +306,7 @@ async def send_message(body: SendMessageRequest, request: Request):
     if (
         not message
         and body.coding_mode
-        and (body.coding_project_path or "").strip()
+        and (body.coding_project_snapshot or "").strip()
     ):
         message = (
             "Give a concise overview of this imported project: structure, main technologies, and entry points."
@@ -375,7 +368,7 @@ async def send_message(body: SendMessageRequest, request: Request):
     coding_ctx = await asyncio.to_thread(
         _prepare_coding_project_context,
         body.coding_mode,
-        body.coding_project_path,
+        body.coding_project_snapshot,
     )
     initial_state = {
         "message": message,
@@ -445,7 +438,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
     if (
         not message
         and body.coding_mode
-        and (body.coding_project_path or "").strip()
+        and (body.coding_project_snapshot or "").strip()
     ):
         message = (
             "Give a concise overview of this imported project: structure, main technologies, and entry points."
@@ -634,7 +627,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
         coding_ctx = await asyncio.to_thread(
             _prepare_coding_project_context,
             body.coding_mode,
-            body.coding_project_path,
+            body.coding_project_snapshot,
         )
         yield _sse_data({"type": "status", "phase": "supervisor", "message": "Running supervisor…"})
         decision = await asyncio.to_thread(
@@ -1119,7 +1112,7 @@ async def send_message_with_files(
     chat_id: Optional[str] = Form(None),
     web_search_query: Optional[str] = Form(None),
     coding_mode: bool = Form(False),
-    coding_project_path: Optional[str] = Form(None),
+    coding_project_snapshot: Optional[str] = Form(None),
     files: list[UploadFile] = File(default=[]),
 ):
     """Accept multipart form: message + files. Saves files to temp and calls send_message."""
@@ -1142,7 +1135,7 @@ async def send_message_with_files(
             chat_id=chat_id,
             web_search_query=(web_search_query or "").strip() or None,
             coding_mode=bool(coding_mode),
-            coding_project_path=(coding_project_path or "").strip() or None,
+            coding_project_snapshot=(coding_project_snapshot or "").strip() or None,
         )
         result = await send_message(body, request)
         return result
