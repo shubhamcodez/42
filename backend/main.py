@@ -32,7 +32,7 @@ import httpx
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from config import (
     get_chat_history_limit,
@@ -45,6 +45,7 @@ from config import (
 from agents.models import get_llm_client
 from agents.supervisor import compute_supervisor_decision
 from memory import get_memory_store, ingest_chat, run_retrieval_pipeline
+from memory.user_profile_io import read_user_profile, write_user_profile
 from memory.chat_log import (
     append_chat_log,
     create_new_chat,
@@ -926,6 +927,51 @@ class IngestChatRequest(BaseModel):
     chat_id: str
 
 
+class UserIdentity(BaseModel):
+    name: str | None = None
+    pronouns: str | None = None
+    languages: str | None = None
+
+
+class UserDemographics(BaseModel):
+    age_range: str | None = None
+    gender: str | None = None
+    timezone: str | None = None
+
+
+class UserPersonality(BaseModel):
+    communication: str | None = None
+    learning_style: str | None = None
+    risk_tolerance: str | None = None
+
+
+class UserPreferences(BaseModel):
+    tools_stack: str | None = None
+    editor_environment: str | None = None
+    code_style: str | None = None
+    docs_comments: str | None = None
+
+
+class UserGoals(BaseModel):
+    current_projects: str | None = None
+    standing_goals: str | None = None
+
+
+class UserBoundaries(BaseModel):
+    topics_avoid: str | None = None
+    accessibility_needs: str | None = None
+
+
+class UserProfilePayload(BaseModel):
+    identity: UserIdentity
+    demographics: UserDemographics
+    personality: UserPersonality
+    preferences: UserPreferences
+    goals: UserGoals
+    boundaries: UserBoundaries
+    appendix_notes: list[str] = Field(default_factory=list)
+
+
 @app.post("/memory/ingest")
 async def api_memory_ingest(body: IngestChatRequest):
     """Ingest a chat's history into the vector store for retrieval. Requires OPENAI_API_KEY."""
@@ -936,6 +982,19 @@ async def api_memory_ingest(body: IngestChatRequest):
     store = get_memory_store()
     n = ingest_chat(store, api_key, body.chat_id)
     return {"ok": True, "chunks_added": n}
+
+
+@app.get("/memory/user-profile")
+async def api_get_user_profile():
+    """Structured profile (JSON on disk under `memory/user_profile.json`)."""
+    return read_user_profile()
+
+
+@app.put("/memory/user-profile")
+async def api_put_user_profile(body: UserProfilePayload):
+    """Replace profile on disk (validated shape)."""
+    write_user_profile(body.model_dump(mode="json"))
+    return {"ok": True}
 
 
 # --- Storage ---

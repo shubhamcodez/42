@@ -1852,6 +1852,27 @@
 .msg-markdown h1 { font-size: 1.15rem; }
 .msg-markdown h2 { font-size: 1.05rem; }
 .msg-markdown h3 { font-size: 1rem; }
+.msg-markdown h4 { font-size: 0.95rem; margin: 0.5rem 0 0.3rem; font-weight: 600; }
+
+.msg-markdown .msg-md-file-jump {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  text-underline-offset: 2px;
+}
+.msg-markdown .msg-md-file-jump:hover {
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+}
 
 .agent-thought-process {
   margin-top: 0.5rem;

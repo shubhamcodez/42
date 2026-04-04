@@ -24,6 +24,8 @@ import {
   googleDisconnect,
   agentStepsWsUrl,
   runHostShellCommand,
+  getUserProfile,
+  saveUserProfile,
 } from './api'
 import {
   buildSnapshotFromDirectoryHandle,
@@ -53,6 +55,16 @@ import { ProjectFileTree } from './ProjectFileTree'
 import { CodingEditSummaryCards } from './CodingEditSummaryCards'
 import { WorkspaceFileReview } from './WorkspaceFileReview'
 import { stripAdaFileFencesForDisplay } from './workspaceFileEdits'
+import { CHAT_HELP_MANUAL_MARKDOWN } from './chatHelpManual'
+import {
+  EMPTY_USER_PROFILE,
+  INTRODUCE_STEPS,
+  INTRODUCE_STEP_COUNT,
+  normalizeProfileAnswer,
+  setUserProfileField,
+  formatIntroduceWelcome,
+  formatIntroduceQuestion,
+} from './userProfileIntroduce'
 import {
   pushWorkspaceEdit,
   workspaceUndoStatus,
@@ -70,6 +82,33 @@ import './App.css'
 function markdownUrlTransform(url) {
   if (typeof url === 'string' && url.startsWith('data:image/')) return url
   return defaultUrlTransform(url)
+}
+
+/** Plain text from ReactMarkdown element children. */
+function markdownNodeToPlainText(node) {
+  if (node == null || node === false) return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(markdownNodeToPlainText).join('')
+  if (typeof node === 'object' && node.props?.children != null) {
+    return markdownNodeToPlainText(node.props.children)
+  }
+  return ''
+}
+
+/**
+ * Match heading or label text to a pending workspace edit path (relative, forward slashes).
+ */
+function resolveEditFilePathFromHeading(files, rawHeading) {
+  if (!files?.length || rawHeading == null) return null
+  let t = String(rawHeading).trim().replace(/^#+\s*/, '').replace(/`/g, '').trim().replace(/\\/g, '/')
+  if (!t) return null
+  if (files.some((f) => f.path === t)) return t
+  const bySuffix = files.find((f) => f.path.endsWith('/' + t))
+  if (bySuffix) return bySuffix.path
+  const wantBase = t.includes('/') ? t.split('/').pop() : t
+  const baseHits = files.filter((f) => f.path.split('/').pop() === wantBase)
+  if (baseHits.length === 1) return baseHits[0].path
+  return null
 }
 
 /** Hide sandbox chart lines in tool JSON, step timeline, and old chat logs. */
@@ -715,6 +754,12 @@ function App() {
   const [workspaceReviewHiddenPaths, setWorkspaceReviewHiddenPaths] = useState(() => new Set())
   const [workspaceUndoTick, setWorkspaceUndoTick] = useState(0)
   const [workspaceUndoUi, setWorkspaceUndoUi] = useState({ canUndo: false, canRedo: false })
+  const [introduceWizard, setIntroduceWizard] = useState(null)
+  const introduceWizardRef = useRef(null)
+
+  useEffect(() => {
+    introduceWizardRef.current = introduceWizard
+  }, [introduceWizard])
 
   useEffect(() => {
     mentionUiRef.current = fileMention
@@ -741,6 +786,64 @@ function App() {
     if (n === 0) return
     setWorkspaceReviewFileIndex((i) => Math.min(Math.max(0, i), n - 1))
   }, [visibleWorkspaceEditsSession?.files?.length])
+
+  const selectWorkspaceEditFile = useCallback(
+    (pathOrLabel) => {
+      const files = visibleWorkspaceEditsSession?.files
+      if (!files?.length || pathOrLabel == null) return
+      const raw = String(pathOrLabel).trim()
+      const path = files.some((f) => f.path === raw)
+        ? raw
+        : resolveEditFilePathFromHeading(files, raw)
+      if (!path) return
+      const i = files.findIndex((f) => f.path === path)
+      if (i < 0) return
+      setWorkspaceReviewFileIndex(i)
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          document
+            .querySelector(
+              '.coding-workbench .workspace-file-review--workbench[aria-label="Workspace file changes"]'
+            )
+            ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+        })
+      })
+    },
+    [visibleWorkspaceEditsSession]
+  )
+
+  const workspaceEditMarkdownComponents = useMemo(() => {
+    const files = visibleWorkspaceEditsSession?.files
+    if (!files?.length) return undefined
+    const mk = (Tag) =>
+      function WorkspaceEditHeading(props) {
+        const plain = markdownNodeToPlainText(props.children)
+        const path = resolveEditFilePathFromHeading(files, plain)
+        if (!path) return <Tag {...props} />
+        return (
+          <Tag {...props}>
+            <button
+              type="button"
+              className="msg-md-file-jump"
+              title={path}
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                selectWorkspaceEditFile(path)
+              }}
+            >
+              {props.children}
+            </button>
+          </Tag>
+        )
+      }
+    return {
+      h1: mk('h1'),
+      h2: mk('h2'),
+      h3: mk('h3'),
+      h4: mk('h4'),
+    }
+  }, [visibleWorkspaceEditsSession, selectWorkspaceEditFile])
 
   const syncFileMentionFromCaret = useCallback(
     (value, cursorPos, kind) => {
@@ -1476,6 +1579,94 @@ function App() {
 
   const workspaceDisplayLabel = () => workspaceLocalLabel.trim() || ''
 
+  const beginIntroduceWizard = async () => {
+    let profile
+    try {
+      profile = await getUserProfile()
+    } catch {
+      profile = structuredClone(EMPTY_USER_PROFILE)
+    }
+    const total = INTRODUCE_STEP_COUNT
+    const firstBody = `${formatIntroduceWelcome(total)}${formatIntroduceQuestion(0, total)}`
+    const initial = { stepIndex: 0, profile }
+    introduceWizardRef.current = initial
+    setIntroduceWizard(initial)
+    appendMessage('/introduce', true)
+    try {
+      await appendChatLog('user', '/introduce')
+    } catch {
+      /* ignore */
+    }
+    appendMessage(firstBody, false)
+    try {
+      await appendChatLog('assistant', firstBody)
+    } catch {
+      /* ignore */
+    }
+    refreshChatList()
+  }
+
+  const continueIntroduceWizard = async (answerRaw) => {
+    const w = introduceWizardRef.current
+    if (!w) return
+    appendMessage(answerRaw, true)
+    try {
+      await appendChatLog('user', answerRaw)
+    } catch {
+      /* ignore */
+    }
+
+    const step = INTRODUCE_STEPS[w.stepIndex]
+    const v = normalizeProfileAnswer(answerRaw)
+    const profile = structuredClone(w.profile)
+    if (step.appendix) {
+      if (v) {
+        profile.appendix_notes = [...(profile.appendix_notes || []), v]
+      }
+    } else {
+      setUserProfileField(profile, step.key, v)
+    }
+
+    const nextIdx = w.stepIndex + 1
+    const total = INTRODUCE_STEP_COUNT
+    if (nextIdx >= total) {
+      try {
+        await saveUserProfile(profile)
+        const jsonBlock = JSON.stringify(profile, null, 2)
+        const doneMsg = `**Profile saved** to \`backend/memory/user_profile.json\`.\n\n\`\`\`json\n${jsonBlock}\n\`\`\`\n\nRun \`/introduce\` again anytime to update your answers.`
+        appendMessage(doneMsg, false)
+        try {
+          await appendChatLog('assistant', doneMsg)
+        } catch {
+          /* ignore */
+        }
+      } catch (e) {
+        const err = e?.message || 'Could not save profile.'
+        const failMsg = `**Profile not saved:** ${err}\n\nYour answers are in this chat. Try again when the API is running, or copy the JSON below.\n\n\`\`\`json\n${JSON.stringify(profile, null, 2)}\n\`\`\``
+        appendMessage(failMsg, false)
+        try {
+          await appendChatLog('assistant', failMsg)
+        } catch {
+          /* ignore */
+        }
+      }
+      introduceWizardRef.current = null
+      setIntroduceWizard(null)
+    } else {
+      const q = formatIntroduceQuestion(nextIdx, total)
+      const next = { stepIndex: nextIdx, profile }
+      introduceWizardRef.current = next
+      setIntroduceWizard(next)
+      appendMessage(q, false)
+      try {
+        await appendChatLog('assistant', q)
+      } catch {
+        /* ignore */
+      }
+    }
+    refreshChatList()
+  }
+
   const handleSend = async (opts = {}) => {
     const raw = input.trim()
     const explicitWs = (opts.webSearchQuery || '').trim()
@@ -1484,6 +1675,51 @@ function App() {
     const filesToSend = [...attachments]
     const cSnap = workspaceSnapshot.trim()
     const projectContextActive = codingModeEnabled && cSnap.length > 0
+    if (/^\/help\s*$/i.test(raw) && filesToSend.length === 0) {
+      setInput('')
+      setFileMention(null)
+      setAttachments([])
+      appendMessage('/help', true)
+      try {
+        await appendChatLog('user', '/help')
+      } catch {
+        /* ignore */
+      }
+      appendMessage(CHAT_HELP_MANUAL_MARKDOWN, false)
+      try {
+        await appendChatLog('assistant', CHAT_HELP_MANUAL_MARKDOWN)
+      } catch {
+        /* ignore */
+      }
+      refreshChatList()
+      return
+    }
+    if (/^\/introduce\/?\s*$/i.test(raw) && filesToSend.length === 0) {
+      setInput('')
+      setFileMention(null)
+      setAttachments([])
+      await beginIntroduceWizard()
+      return
+    }
+    if (introduceWizardRef.current && filesToSend.length > 0 && !/^\/introduce\/?\s*$/i.test(raw)) {
+      const warn =
+        '**Attachments are not used during `/introduce`.** Remove files from the composer, then answer the last question (or send `/introduce` to start over).'
+      appendMessage(warn, false)
+      try {
+        await appendChatLog('assistant', warn)
+      } catch {
+        /* ignore */
+      }
+      refreshChatList()
+      return
+    }
+    if (introduceWizardRef.current && filesToSend.length === 0 && raw) {
+      setInput('')
+      setFileMention(null)
+      setAttachments([])
+      await continueIntroduceWizard(raw)
+      return
+    }
     if (!raw && filesToSend.length === 0 && !extraWs && !projectContextActive) {
       return
     }
@@ -1683,7 +1919,11 @@ function App() {
             ) : (
               <div className="msg-bot-body">
                 <div className="msg-markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={markdownUrlTransform}>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    urlTransform={markdownUrlTransform}
+                    components={workspaceEditMarkdownComponents}
+                  >
                     {msg.content}
                   </ReactMarkdown>
                 </div>
@@ -1726,7 +1966,11 @@ function App() {
             {liveReply ? (
               <div className="msg-bot-body msg-stream-reply-body">
                 <div className="msg-markdown stream-reply-md">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={markdownUrlTransform}>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    urlTransform={markdownUrlTransform}
+                    components={workspaceEditMarkdownComponents}
+                  >
                     {liveReply}
                   </ReactMarkdown>
                 </div>
@@ -2176,10 +2420,7 @@ function App() {
                   session={visibleWorkspaceEditsSession}
                   resolveBaseContent={resolveWorkspaceFileBase}
                   activePath={visibleWorkspaceEditsSession.files[workspaceReviewFileIndex]?.path}
-                  onSelectPath={(path) => {
-                    const i = visibleWorkspaceEditsSession.files.findIndex((f) => f.path === path)
-                    if (i >= 0) setWorkspaceReviewFileIndex(i)
-                  }}
+                  onSelectPath={selectWorkspaceEditFile}
                 />
               ) : null}
               <div className="chat-container chat-container--rail">{chatMainInner}</div>

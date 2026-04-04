@@ -271,6 +271,19 @@ export async function googleDisconnect() {
   return request('/auth/google/disconnect', { method: 'POST' });
 }
 
+/** @returns {Promise<object>} User profile (see `backend/memory/user_profile.json`). */
+export async function getUserProfile() {
+  return request('/memory/user-profile', { method: 'GET' });
+}
+
+/** @param {object} profile — full profile object */
+export async function saveUserProfile(profile) {
+  return request('/memory/user-profile', {
+    method: 'PUT',
+    body: JSON.stringify(profile),
+  });
+}
+
 /**
  * Run one command on the API host (shell on by default; Windows defaults to PowerShell).
  * @param {string} command
