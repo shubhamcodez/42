@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Ada
 
 Assistant that can chat, control the **desktop** (screenshot + vision + pyautogui—including your on-screen browser), run **sandboxed Python**, optional **host shell** (opt-in), and **market data / analysis** via **yfinance** (finance agent). Routes via a supervisor LLM; supports OpenAI and xAI (Grok).
@@ -76,3 +77,6 @@ Google rejects the login when the redirect URI in the request is not listed on t
 ### Message: “doesn’t comply with Google’s OAuth 2.0 policy” / “register the redirect URI”
 
 Usually this still means **Google Cloud Console** is not set up for the client ID your backend uses: wrong client type (Desktop vs Web), redirect URI not saved on **that** client, or JavaScript origin missing. Use **Settings** in the app to copy the exact **redirect URI** and verify the **Client ID fingerprint** matches the Web client you edit in [Credentials](https://console.cloud.google.com/apis/credentials). Official overview: [Google OAuth 2.0 policies](https://developers.google.com/identity/protocols/oauth2/policies).
+=======
+Trying to make the smartest AI agent ever just for fun!
+>>>>>>> add7b1785a71138953f6fe643e3ebe9b954cc135

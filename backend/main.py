@@ -186,6 +186,8 @@ class SendMessageRequest(BaseModel):
     web_search_query: Optional[str] = None
     coding_mode: bool = False
     coding_project_path: Optional[str] = None
+    """Pre-built index + excerpts from the browser (open folder); wins over path when set."""
+    coding_project_snapshot: Optional[str] = None
 
 
 class ChatbotResponseRequest(BaseModel):
