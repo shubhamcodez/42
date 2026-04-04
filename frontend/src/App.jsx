@@ -1,4 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import CodeMirror from '@uiw/react-codemirror'
+import { Prec } from '@codemirror/state'
+import { keymap } from '@codemirror/view'
+import { languageExtensionsForPath, themeExtensionsForScheme } from './filePreviewCodeMirror'
 import {
   listChats,
   setCurrentChat,
@@ -47,6 +51,17 @@ import {
 } from './projectFileCache'
 import { getActiveFileMention, rankProjectPathMatches } from './projectPathSuggest'
 import { ProjectFileTree } from './ProjectFileTree'
+import { WorkspaceFileReview } from './WorkspaceFileReview'
+import { stripAdaFileFencesForDisplay } from './workspaceFileEdits'
+import {
+  pushWorkspaceEdit,
+  workspaceUndoStatus,
+  peekWorkspaceUndo,
+  finalizeWorkspaceUndoPop,
+  peekWorkspaceRedo,
+  finalizeWorkspaceRedoPop,
+  clearWorkspaceUndo,
+} from './workspaceUndoHistory'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import './App.css'
@@ -249,11 +264,28 @@ function CopyResponseButton({ text }) {
 }
 
 /** VS Code–style file tab above chat when opening from explorer (editable; Save writes disk or cache). */
-function ChatFilePreview({ preview, onClose, onSave }) {
+function ChatFilePreview({ preview, onClose, onSave, colorScheme }) {
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
   const [saveFlash, setSaveFlash] = useState(null)
+  const editorViewRef = useRef(null)
+  const scrollCleanupRef = useRef(null)
+  const saveHotkeyRef = useRef(() => {})
+  const lineGutterRef = useRef(null)
+
+  const lineCount = useMemo(() => Math.max(1, draft.split('\n').length), [draft])
+
+  const syncLineGutterScroll = useCallback(() => {
+    const view = editorViewRef.current
+    const gh = lineGutterRef.current
+    if (!view || !gh) return
+    gh.scrollTop = view.scrollDOM.scrollTop
+  }, [])
+
+  useEffect(() => {
+    syncLineGutterScroll()
+  }, [draft, syncLineGutterScroll])
 
   useEffect(() => {
     setSaveError(null)
@@ -276,7 +308,7 @@ function ChatFilePreview({ preview, onClose, onSave }) {
   const dirty = !loading && !error && !isImage && draft !== body
   const showEditor = !loading && !error && !isImage
 
-  const handleSave = async () => {
+  const handleSave = useCallback(async () => {
     if (!onSave || !preview.relPath || saving || !dirty) return
     setSaving(true)
     setSaveError(null)
@@ -296,7 +328,54 @@ function ChatFilePreview({ preview, onClose, onSave }) {
     } finally {
       setSaving(false)
     }
-  }
+  }, [onSave, preview.relPath, saving, dirty, draft])
+
+  useEffect(() => {
+    saveHotkeyRef.current = () => {
+      void handleSave()
+    }
+  }, [handleSave])
+
+  const scheme = colorScheme === 'light' ? 'light' : 'dark'
+  const cmExtensions = useMemo(
+    () => [
+      ...themeExtensionsForScheme(scheme),
+      ...languageExtensionsForPath(preview.relPath),
+      Prec.highest(
+        keymap.of([
+          {
+            key: 'Mod-s',
+            run: () => {
+              saveHotkeyRef.current()
+              return true
+            },
+          },
+        ]),
+      ),
+    ],
+    [scheme, preview.relPath],
+  )
+
+  const onCreateEditor = useCallback((view) => {
+    editorViewRef.current = view
+    scrollCleanupRef.current?.()
+    const el = view.scrollDOM
+    const sync = () => {
+      const gh = lineGutterRef.current
+      if (gh) gh.scrollTop = el.scrollTop
+    }
+    el.addEventListener('scroll', sync, { passive: true })
+    sync()
+    scrollCleanupRef.current = () => el.removeEventListener('scroll', sync)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      scrollCleanupRef.current?.()
+      scrollCleanupRef.current = null
+      editorViewRef.current = null
+    }
+  }, [preview?.relPath])
 
   return (
     <div className="chat-file-preview" role="region" aria-label="Open file">
@@ -342,20 +421,34 @@ function ChatFilePreview({ preview, onClose, onSave }) {
       {error ? <div className="chat-file-preview__error">{error}</div> : null}
       {showEditor ? (
         <div className="chat-file-preview__body">
-          <textarea
-            className="chat-file-preview__editor"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-                e.preventDefault()
-                handleSave()
-              }
-            }}
-            spellCheck={false}
-            autoComplete="off"
-            aria-label="File contents"
-          />
+          <div className="chat-file-preview__editor-wrap">
+            <CodeMirror
+              className="chat-file-preview__codemirror"
+              value={draft}
+              height="100%"
+              minHeight="10rem"
+              theme="none"
+              indentWithTab
+              basicSetup={{ lineNumbers: false, foldGutter: false }}
+              extensions={cmExtensions}
+              onCreateEditor={onCreateEditor}
+              onChange={(v) => setDraft(v)}
+              aria-label="File contents"
+            />
+            <div
+              className="chat-file-preview__line-gutter"
+              style={{ width: `${Math.max(2, String(lineCount).length) + 1}ch` }}
+              aria-hidden
+            >
+              <div ref={lineGutterRef} className="chat-file-preview__line-gutter-scroll">
+                {Array.from({ length: lineCount }, (_, i) => (
+                  <div key={i + 1} className="chat-file-preview__line-num">
+                    {i + 1}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
       ) : null}
       {isImage && !loading && !error && preview.imageUrl ? (
@@ -562,6 +655,7 @@ function App() {
   /** Screenshots arrive on WebSocket; SSE step may arrive first or second — stash by step id */
   const screenshotPendingRef = useRef({})
   const wsRef = useRef(null)
+  const streamAdaStripRef = useRef('')
   const messagesEndRef = useRef(null)
   const fileInputRef = useRef(null)
   const projectFolderInputRef = useRef(null)
@@ -604,6 +698,10 @@ function App() {
   const [projectImportBusy, setProjectImportBusy] = useState(false)
   const [codingModeEnabled, setCodingModeEnabled] = useState(readStoredCodingMode)
   const [filePreview, setFilePreview] = useState(null)
+  /** Pending ```ada-file``` edits from last assistant turn (review before apply). */
+  const [pendingWorkspaceEdits, setPendingWorkspaceEdits] = useState(null)
+  const [workspaceUndoTick, setWorkspaceUndoTick] = useState(0)
+  const [workspaceUndoUi, setWorkspaceUndoUi] = useState({ canUndo: false, canRedo: false })
 
   useEffect(() => {
     mentionUiRef.current = fileMention
@@ -812,7 +910,10 @@ function App() {
   }, [codingModeEnabled])
 
   useEffect(() => {
-    if (!codingModeEnabled) setFilePreview(null)
+    if (!codingModeEnabled) {
+      setFilePreview(null)
+      setPendingWorkspaceEdits(null)
+    }
   }, [codingModeEnabled])
 
   useEffect(() => {
@@ -834,11 +935,47 @@ function App() {
     }
   }, [codingModeEnabled, workspaceLocalLabel])
 
+  const resolveWorkspaceFileBase = useCallback(async (relPath) => {
+    let h = projectRootHandleRef.current
+    if (!h) {
+      try {
+        const rec = await loadProjectRootHandleRecord()
+        if (
+          rec?.handle?.kind === 'directory' &&
+          rec.rootLabel === workspaceLocalLabel.trim() &&
+          (await ensureDirectoryReadPermission(rec.handle))
+        ) {
+          projectRootHandleRef.current = rec.handle
+          h = rec.handle
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (h) {
+      const t = await readProjectFileText(h, relPath)
+      if (t) return t
+    }
+    const label = workspaceLocalLabel.trim()
+    if (!label) return ''
+    return (await getPreviewFileText(label, relPath)) || ''
+  }, [workspaceLocalLabel])
+
   const saveProjectFile = useCallback(
-    async (relPath, text) => {
+    async (relPath, text, options = {}) => {
+      const skipUndoRecord = !!options.skipUndoRecord
       if (isProjectImagePath(relPath)) {
         return { ok: false, error: 'Image previews are read-only.' }
       }
+      let beforeSnapshot = ''
+      if (!skipUndoRecord) {
+        try {
+          beforeSnapshot = await resolveWorkspaceFileBase(relPath)
+        } catch {
+          beforeSnapshot = ''
+        }
+      }
+      const str = typeof text === 'string' ? text : String(text ?? '')
       let h = projectRootHandleRef.current
       if (!h) {
         try {
@@ -860,23 +997,97 @@ function App() {
             error: 'Allow read & write access for this folder when the browser prompts.',
           }
         }
-        const r = await writeProjectFileText(h, relPath, text)
+        const r = await writeProjectFileText(h, relPath, str)
         if (r.ok) {
-          setFilePreview((p) => (p && p.relPath === relPath ? { ...p, body: text, source: 'handle' } : p))
+          setFilePreview((p) => (p && p.relPath === relPath ? { ...p, body: str, source: 'handle' } : p))
+          const wl = workspaceLocalLabel.trim()
+          if (!skipUndoRecord && wl && beforeSnapshot !== str) {
+            void pushWorkspaceEdit(wl, relPath, beforeSnapshot, str)
+            setWorkspaceUndoTick((t) => t + 1)
+          }
         }
         return r
       }
       const label = workspaceLocalLabel.trim()
       if (!label) return { ok: false, error: 'No project linked.' }
-      const okCache = await putPreviewFileText(label, relPath, text)
+      const okCache = await putPreviewFileText(label, relPath, str)
       if (okCache) {
-        setFilePreview((p) => (p && p.relPath === relPath ? { ...p, body: text, source: 'cache' } : p))
+        setFilePreview((p) => (p && p.relPath === relPath ? { ...p, body: str, source: 'cache' } : p))
+        if (!skipUndoRecord && beforeSnapshot !== str) {
+          void pushWorkspaceEdit(label, relPath, beforeSnapshot, str)
+          setWorkspaceUndoTick((t) => t + 1)
+        }
         return { ok: true, cacheOnly: true }
       }
       return { ok: false, error: 'Could not update cached copy.' }
     },
-    [workspaceLocalLabel],
+    [workspaceLocalLabel, resolveWorkspaceFileBase],
   )
+
+  const applyWorkspaceUndo = useCallback(async () => {
+    const label = workspaceLocalLabel.trim()
+    if (!label) return
+    const peek = await peekWorkspaceUndo(label)
+    if (!peek?.deltas?.length) return
+    const results = new Map()
+    for (const d of peek.deltas) {
+      const r = await saveProjectFile(d.relPath, d.content, { skipUndoRecord: true })
+      if (!r?.ok) {
+        window.alert(r?.error || 'Could not restore one or more files.')
+        return
+      }
+      results.set(d.relPath, r)
+    }
+    await finalizeWorkspaceUndoPop(label)
+    setFilePreview((p) => {
+      if (!p) return p
+      const d = peek.deltas.find((x) => x.relPath === p.relPath)
+      if (!d) return p
+      const r = results.get(d.relPath)
+      return { ...p, body: d.content, source: r?.cacheOnly ? 'cache' : 'handle' }
+    })
+    setWorkspaceUndoTick((t) => t + 1)
+  }, [workspaceLocalLabel, saveProjectFile])
+
+  const applyWorkspaceRedo = useCallback(async () => {
+    const label = workspaceLocalLabel.trim()
+    if (!label) return
+    const peek = await peekWorkspaceRedo(label)
+    if (!peek?.deltas?.length) return
+    const results = new Map()
+    for (const d of peek.deltas) {
+      const r = await saveProjectFile(d.relPath, d.content, { skipUndoRecord: true })
+      if (!r?.ok) {
+        window.alert(r?.error || 'Could not re-apply one or more files.')
+        return
+      }
+      results.set(d.relPath, r)
+    }
+    await finalizeWorkspaceRedoPop(label)
+    setFilePreview((p) => {
+      if (!p) return p
+      const d = peek.deltas.find((x) => x.relPath === p.relPath)
+      if (!d) return p
+      const r = results.get(d.relPath)
+      return { ...p, body: d.content, source: r?.cacheOnly ? 'cache' : 'handle' }
+    })
+    setWorkspaceUndoTick((t) => t + 1)
+  }, [workspaceLocalLabel, saveProjectFile])
+
+  useEffect(() => {
+    let cancelled = false
+    const label = workspaceLocalLabel.trim()
+    if (!label || !codingModeEnabled) {
+      setWorkspaceUndoUi({ canUndo: false, canRedo: false })
+      return
+    }
+    workspaceUndoStatus(label).then((s) => {
+      if (!cancelled) setWorkspaceUndoUi(s)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [workspaceLocalLabel, codingModeEnabled, workspaceUndoTick])
 
   const openProjectFile = useCallback(
     async (relPath) => {
@@ -1126,10 +1337,14 @@ function App() {
 
   const clearProjectContext = () => {
     const label = workspaceLocalLabel.trim()
-    if (label) clearPreviewCacheForRoot(label).catch(() => {})
+    if (label) {
+      clearPreviewCacheForRoot(label).catch(() => {})
+      clearWorkspaceUndo(label).catch(() => {})
+    }
     projectRootHandleRef.current = null
     clearProjectRootHandleRecord().catch(() => {})
     setFilePreview(null)
+    setPendingWorkspaceEdits(null)
     setWorkspaceLocalLabel('')
     setWorkspaceSnapshot('')
     setWorkspaceRelPaths([])
@@ -1256,6 +1471,7 @@ function App() {
     appendMessage(displayText, true)
     setSending(true)
     setLiveReply('')
+    streamAdaStripRef.current = ''
     setStreamTimeline([])
     screenshotPendingRef.current = {}
 
@@ -1323,7 +1539,10 @@ function App() {
             webSearchQuery: extraWs.trim() || null,
             codingMode: projectContextActive,
             codingProjectSnapshot: projectContextActive ? cSnap || null : null,
-            onChunk: (delta) => setLiveReply((prev) => (prev || '') + delta),
+            onChunk: (delta) => {
+              streamAdaStripRef.current += delta
+              setLiveReply(stripAdaFileFencesForDisplay(streamAdaStripRef.current))
+            },
             onStatus: (d) => {
               if (d.phase === 'done') return
               setStreamTimeline((prev) => [
@@ -1352,6 +1571,9 @@ function App() {
         })
         reply = streamResult?.reply ?? streamResult ?? ''
         if (streamResult?.tool_used) appendToolMessage(streamResult.tool_used)
+        if (streamResult?.file_edits?.length) {
+          setPendingWorkspaceEdits({ id: Date.now(), files: streamResult.file_edits })
+        }
         appendMessage(reply || '', false)
         await appendChatLog('assistant', reply || '')
       }
@@ -1573,6 +1795,26 @@ function App() {
                         <button
                           type="button"
                           className="repo-context-icon-btn"
+                          title="Undo last saved change to a project file (per browser; survives refresh)"
+                          aria-label="Undo last project file edit"
+                          disabled={!workspaceUndoUi.canUndo}
+                          onClick={() => applyWorkspaceUndo()}
+                        >
+                          Undo
+                        </button>
+                        <button
+                          type="button"
+                          className="repo-context-icon-btn"
+                          title="Redo a previously undone project file edit"
+                          aria-label="Redo project file edit"
+                          disabled={!workspaceUndoUi.canRedo}
+                          onClick={() => applyWorkspaceRedo()}
+                        >
+                          Redo
+                        </button>
+                        <button
+                          type="button"
+                          className="repo-context-icon-btn"
                           title="Pick another folder"
                           aria-label="Pick another folder"
                           onClick={() => pickLocalProjectFolder()}
@@ -1611,12 +1853,23 @@ function App() {
         ) : null}
         <div className="main-column">
         {panel === 'chats' ? (
-        <div className="chat-container">
+        <div className={`chat-container${filePreview ? ' chat-container--file-preview-open' : ''}`}>
           <ChatFilePreview
             preview={filePreview}
             onClose={() => setFilePreview(null)}
             onSave={codingModeEnabled ? saveProjectFile : null}
+            colorScheme={colorScheme}
           />
+          {codingModeEnabled && pendingWorkspaceEdits ? (
+            <WorkspaceFileReview
+              session={pendingWorkspaceEdits}
+              workspaceLabel={workspaceDisplayLabel() || ''}
+              resolveBaseContent={resolveWorkspaceFileBase}
+              onWriteFile={saveProjectFile}
+              onDismiss={() => setPendingWorkspaceEdits(null)}
+              onOpenFile={openProjectFile}
+            />
+          ) : null}
           <div className="chat-messages">
             {messages.map((msg, i) => (
               <div key={i} className={`msg ${msg.role === 'user' ? 'msg-user' : msg.role === 'tool' ? 'msg-tool' : 'msg-bot'}`}>

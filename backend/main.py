@@ -73,6 +73,7 @@ from tools.python_sandbox import run_sandboxed_python
 from tools.sandbox_markdown import redact_sandbox_result_dict
 from tools.file_grep import grep_files
 from tools.shell_runner import is_shell_enabled, run_shell_command
+from tools.workspace_file_edits import extract_ada_file_edits
 from auth.google_oauth import (
     callback_error_redirect,
     callback_success_redirect,
@@ -123,6 +124,12 @@ _SENTINEL = object()
 def _sse_data(obj: dict) -> str:
     """One SSE event line (JSON payload)."""
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+def _strip_workspace_edits_from_reply(reply: str) -> tuple[str, list | None]:
+    """Remove ```ada-file:...``` blocks from visible reply; return pending edits for UI."""
+    clean, edits = extract_ada_file_edits(reply or "")
+    return clean, edits if edits else None
 
 
 def _agent_step_for_sse(payload: dict) -> dict:
@@ -385,9 +392,10 @@ async def send_message(body: SendMessageRequest, request: Request):
     graph = _get_router_graph()
     drain_task = asyncio.create_task(drain_steps())
     start = time.perf_counter()
+    file_edits = None
     try:
         result = await graph.ainvoke(initial_state)
-        reply = result.get("reply") or "No response."
+        reply, file_edits = _strip_workspace_edits_from_reply(result.get("reply") or "No response.")
         route = result.get("route") or "chat"
         tool_used = result.get("tool_used")
         if tool_used and chat_id:
@@ -417,6 +425,8 @@ async def send_message(body: SendMessageRequest, request: Request):
         step_queue.put(_SENTINEL)
         await drain_task
     out = {"reply": reply}
+    if file_edits:
+        out["file_edits"] = file_edits
     if result.get("tool_used"):
         out["tool_used"] = result["tool_used"]
     return out
@@ -446,6 +456,11 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
     chat_id = body.chat_id
     has_attachments = len(attachment_paths) > 0
     client = get_llm_client(provider)
+    coding_ctx = await asyncio.to_thread(
+        _prepare_coding_project_context,
+        body.coding_mode,
+        body.coding_project_snapshot,
+    )
 
     async def _stream_chat_reply(
         api_key_,
@@ -494,7 +509,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 raise chunk
             full.append(chunk)
             yield f"data: {json.dumps({'delta': chunk})}\n\n"
-        reply = "".join(full)
+        reply, file_edits = _strip_workspace_edits_from_reply("".join(full))
         if provider_ is not None and trace_user_message_ is not None:
             trace_log(
                 provider=provider_,
@@ -506,6 +521,8 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             )
             schedule_post_turn_observability()
         payload = {"done": True, "reply": reply}
+        if file_edits:
+            payload["file_edits"] = file_edits
         if tool_used_:
             payload["tool_used"] = tool_used_
             if chat_id_:
@@ -543,6 +560,16 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
         if tool_system:
             sys_content = (tool_system + "\n\n" + (sys_content or "")) if sys_content else tool_system
         sys_final = (sys_content.strip() or None) if sys_content else None
+        if (coding_ctx or "").strip():
+            inj = (
+                "\n\n## Project workspace (linked folder)\n"
+                "When the user asks to change files, output each updated file as a markdown code fence whose "
+                "**first line** is exactly `ada-file:relative/path/from/root.ext` (then a newline), then the "
+                "**complete** new file contents, then a closing line ` ``` ` (three backticks) alone. "
+                "Use forward slashes. One fence per file. Other code fences are fine for examples; only `ada-file:` "
+                "openers are collected as pending workspace edits."
+            )
+            sys_final = (sys_final + inj) if sys_final else inj.strip()
         return hist, sys_final, tool_used
 
     async def event_stream():
@@ -624,11 +651,6 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 yield line
             return
 
-        coding_ctx = await asyncio.to_thread(
-            _prepare_coding_project_context,
-            body.coding_mode,
-            body.coding_project_snapshot,
-        )
         yield _sse_data({"type": "status", "phase": "supervisor", "message": "Running supervisor…"})
         decision = await asyncio.to_thread(
             compute_supervisor_decision,
@@ -745,6 +767,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
         reply = ""
         route = "chat"
         tool_used = None
+        file_edits: list | None = None
         graph_task: asyncio.Task | None = None
 
         try:
@@ -808,7 +831,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
 
             assert graph_task is not None
             result = graph_task.result()
-            reply = result.get("reply") or "No response."
+            reply, file_edits = _strip_workspace_edits_from_reply(result.get("reply") or "No response.")
             route = result.get("route") or "chat"
             tool_used = result.get("tool_used")
             if tool_used and chat_id:
@@ -842,6 +865,8 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
 
         yield _sse_data({"type": "status", "phase": "done", "message": "Agent finished"})
         payload = {"done": True, "reply": reply}
+        if file_edits:
+            payload["file_edits"] = file_edits
         if tool_used:
             payload["tool_used"] = tool_used
         yield f"data: {json.dumps(payload)}\n\n"

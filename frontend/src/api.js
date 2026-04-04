@@ -123,8 +123,12 @@ export async function sendMessageStream(
               toolUsed = data.tool_used
               onToolUsed?.(data.tool_used)
             }
-            onDone?.(data.reply)
-            return { reply: data.reply, tool_used: data.tool_used ?? null }
+            onDone?.(data.reply, data.file_edits ?? null)
+            return {
+              reply: data.reply,
+              tool_used: data.tool_used ?? null,
+              file_edits: data.file_edits ?? null,
+            }
           }
         } catch (_) {}
       }

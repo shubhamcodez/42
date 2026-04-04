@@ -32,6 +32,57 @@ Example for "factorial of 10":
 """
 
 
+def _propose_workspace_file_fences(
+    goal: str,
+    project_context: str,
+    agent_reply: str,
+    api_key: str,
+    provider: str,
+) -> str:
+    """
+    Second LLM pass: emit ```ada-file:...``` blocks when the sandbox task implies repo edits.
+    Returns extra markdown to append (empty if none). Caller strips fences for the chat payload.
+    """
+    ctx = (project_context or "").strip()
+    if len(ctx) < 80:
+        return ""
+    mod = get_llm_client(provider)
+    client = mod._client(api_key)
+    model = getattr(mod, "CHAT_MODEL", "gpt-4o")
+    system = (
+        "You propose updates to the user's repository files after a coding-agent (Python sandbox) run. "
+        "The sandbox cannot edit the user's disk.\n\n"
+        "If the user's task requires changing source files in their project, output ONLY markdown fences. "
+        "Each fence:\n"
+        "- Opening line: a markdown fence ``` then `ada-file:relative/path.ext` then newline\n"
+        "- Then the COMPLETE new file text\n"
+        "- Closing line: ```\n"
+        "Use forward slashes. Full files only.\n\n"
+        "If no project files need changes, reply with exactly: NO_EDITS"
+    )
+    user = (
+        f"User task:\n{goal[:3000]}\n\n"
+        f"Repository snapshot (truncated):\n{ctx[:16000]}\n\n"
+        f"Agent answer (markdown):\n{(agent_reply or '')[:10000]}\n\n"
+        "Respond with NO_EDITS or ada-file blocks only."
+    )
+    create_kw: dict = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        **chat_completion_limit_kwargs(provider, model, 12000),
+    }
+    if not should_omit_temperature(provider, model):
+        create_kw["temperature"] = 0.1
+    try:
+        resp = client.chat.completions.create(**create_kw)
+        raw = (resp.choices[0].message.content or "").strip()
+    except Exception:
+        return ""
+    if not raw or raw.upper() == "NO_EDITS" or raw.split("\n", 1)[0].strip().upper() == "NO_EDITS":
+        return ""
+    return "\n\n" + raw
+
+
 def _parse_code_from_llm(raw: str) -> Optional[str]:
     text = (raw or "").strip()
     text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
@@ -179,6 +230,11 @@ def run_coding_agent(
                 True,
                 screenshot_base64=None,
             )
+        ctx_full = (project_context or "").strip()
+        if ctx_full:
+            extra = _propose_workspace_file_fences(goal, ctx_full, reply, api_key, provider)
+            if extra:
+                reply = reply + extra
     else:
         err = result.get("error") or "unknown error"
         tb = (result.get("traceback") or "")[:2000]

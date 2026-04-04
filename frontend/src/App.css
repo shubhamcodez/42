@@ -1107,6 +1107,23 @@
   overflow: hidden;
 }
 
+/* File preview grows to the composer; messages stay a bounded strip so there is no empty flex gap. */
+.chat-container--file-preview-open .chat-file-preview {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  flex-shrink: 1;
+}
+
+.chat-container--file-preview-open .chat-messages {
+  flex: 0 1 auto;
+  max-height: min(32vh, 360px);
+  min-height: 0;
+  padding-top: 0.65rem;
+  padding-bottom: 0;
+  gap: 0.65rem;
+}
+
 .chat-file-preview {
   flex-shrink: 0;
   display: flex;
@@ -1234,6 +1251,72 @@
   flex-direction: column;
 }
 
+.chat-file-preview__editor-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  min-height: 10rem;
+}
+
+.chat-file-preview__editor-wrap:focus-within {
+  box-shadow: inset 0 0 0 1px var(--accent-muted);
+}
+
+.chat-file-preview__codemirror {
+  flex: 1;
+  min-width: 0;
+  min-height: 10rem;
+  overflow: hidden;
+  text-align: left;
+}
+
+.chat-file-preview__codemirror .cm-editor {
+  height: 100%;
+  border-radius: 0;
+  outline: none;
+}
+
+.chat-file-preview__codemirror .cm-editor.cm-focused {
+  outline: none;
+}
+
+.chat-file-preview__codemirror .cm-scroller {
+  min-height: 10rem;
+}
+
+.chat-file-preview__line-gutter {
+  flex-shrink: 0;
+  border-left: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  min-width: 2.5rem;
+  overflow: hidden;
+}
+
+.chat-file-preview__line-gutter-scroll {
+  height: 100%;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  padding: 0.65rem 0.45rem 0.85rem 0.35rem;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.chat-file-preview__line-gutter-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.chat-file-preview__line-num {
+  font-size: 0.75rem;
+  line-height: 1.5;
+  font-family: ui-monospace, 'Consolas', 'Monaco', monospace;
+  text-align: right;
+  color: var(--text-muted);
+  white-space: nowrap;
+  user-select: none;
+}
+
 .chat-file-preview__body--media {
   align-items: center;
   justify-content: center;
@@ -1249,28 +1332,6 @@
   height: auto;
   object-fit: contain;
   display: block;
-}
-
-.chat-file-preview__editor {
-  flex: 1;
-  width: 100%;
-  min-height: 10rem;
-  margin: 0;
-  padding: 0.65rem 0.75rem 0.85rem;
-  box-sizing: border-box;
-  border: none;
-  border-radius: 0;
-  resize: vertical;
-  font-size: 0.75rem;
-  line-height: 1.5;
-  font-family: ui-monospace, 'Consolas', 'Monaco', monospace;
-  color: var(--text-primary);
-  background: transparent;
-}
-
-.chat-file-preview__editor:focus {
-  outline: none;
-  box-shadow: inset 0 0 0 1px var(--accent-muted);
 }
 
 .chat-file-preview__code {
@@ -2193,4 +2254,280 @@
 
 .chat-terminal__input:disabled {
   opacity: 0.65;
+}
+
+/* Workspace file edits (post-LLM review, Cursor-style) */
+.workspace-file-review {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: min(48vh, 560px);
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-deep);
+}
+
+.workspace-file-review--loading {
+  padding: 0.75rem 1rem;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.workspace-file-review__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.65rem;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.workspace-file-review__title {
+  flex: 1;
+  min-width: 120px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.workspace-file-review__nav {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.workspace-file-review__counter {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  min-width: 4.5ch;
+  text-align: center;
+}
+
+.workspace-file-review__icon-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-secondary);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.workspace-file-review__icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.workspace-file-review__file-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+.workspace-file-review__close {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.workspace-file-review__close:hover {
+  background: var(--bg-chat-active);
+  color: var(--text-primary);
+}
+
+.workspace-file-review__error {
+  margin: 0;
+  padding: 0.4rem 0.65rem;
+  font-size: 0.75rem;
+  color: #f0883e;
+  background: rgba(240, 136, 62, 0.08);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.workspace-file-review__path-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.65rem;
+  border-bottom: 1px solid var(--border-secondary);
+  background: var(--bg-navbar);
+}
+
+.workspace-file-review__path-link {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border: none;
+  background: none;
+  font-family: ui-monospace, 'Consolas', 'Monaco', monospace;
+  font-size: 0.72rem;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-file-review__bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.workspace-file-review__link-btn {
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.workspace-file-review__btn {
+  padding: 0.25rem 0.55rem;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border-secondary);
+}
+
+.workspace-file-review__btn--ghost {
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.workspace-file-review__btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0d1117;
+}
+
+.workspace-file-review__btn--accent {
+  background: rgba(63, 185, 80, 0.22);
+  border-color: rgba(63, 185, 80, 0.45);
+  color: #c9f8d2;
+}
+
+[data-theme='light'] .workspace-file-review__btn--primary {
+  color: #fff;
+}
+
+[data-theme='light'] .workspace-file-review__btn--accent {
+  color: #1a4d2e;
+}
+
+.workspace-file-review__btn--small {
+  padding: 0.15rem 0.45rem;
+  font-size: 0.65rem;
+}
+
+.workspace-file-review__btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.workspace-file-review__diff-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.35rem 0.5rem 0.65rem;
+}
+
+.workspace-file-review__same {
+  margin: 0.5rem 0.65rem;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.workspace-file-review__hunk {
+  margin-bottom: 0.65rem;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-blackish);
+}
+
+.workspace-file-review__hunk--rejected {
+  opacity: 0.55;
+}
+
+.workspace-file-review__hunk-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0.45rem;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.workspace-file-review__hunk-meta {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.workspace-file-review__hunk-pre {
+  margin: 0;
+  padding: 0.35rem 0.45rem;
+  font-family: ui-monospace, 'Consolas', 'Monaco', monospace;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  overflow-x: auto;
+}
+
+.workspace-file-review__ln {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.workspace-file-review__ln-mark {
+  display: inline-block;
+  width: 1ch;
+  margin-right: 0.35rem;
+  user-select: none;
+  color: var(--text-tertiary);
+}
+
+.workspace-file-review__ln--ctx {
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.workspace-file-review__ln--add {
+  color: #c9f8d2;
+  background: rgba(63, 185, 80, 0.12);
+}
+
+.workspace-file-review__ln--del {
+  color: #ffb1b1;
+  background: rgba(248, 81, 73, 0.12);
+}
+
+[data-theme='light'] .workspace-file-review__ln--add {
+  color: #1a4d2e;
+  background: rgba(63, 185, 80, 0.18);
+}
+
+[data-theme='light'] .workspace-file-review__ln--del {
+  color: #a40e26;
+  background: rgba(248, 81, 73, 0.12);
 }
