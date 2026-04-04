@@ -563,11 +563,12 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
         if (coding_ctx or "").strip():
             inj = (
                 "\n\n## Project workspace (linked folder)\n"
-                "When the user asks to change files, output each updated file as a markdown code fence whose "
-                "**first line** is exactly `ada-file:relative/path/from/root.ext` (then a newline), then the "
-                "**complete** new file contents, then a closing line ` ``` ` (three backticks) alone. "
-                "Use forward slashes. One fence per file. Other code fences are fine for examples; only `ada-file:` "
-                "openers are collected as pending workspace edits."
+                "The client sends a snapshot of the user's **currently open folder**. When they ask you to fix, implement, "
+                "or refactor **project** code, output each updated file as a markdown code fence whose **first line** is "
+                "exactly `ada-file:relative/path/from/root.ext` (then a newline), then the **complete** new file contents "
+                "(full file, not a patch), then a closing line ` ``` ` (three backticks) alone. "
+                "Use forward slashes; one fence per file. The UI shows a diff and applies changes on the user's machine. "
+                "Other code fences are for examples only; only `ada-file:` openers become pending workspace edits."
             )
             sys_final = (sys_final + inj) if sys_final else inj.strip()
         return hist, sys_final, tool_used

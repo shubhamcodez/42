@@ -563,8 +563,12 @@ def compute_supervisor_decision(
     um = (user_message or "").strip()
     ctx = (coding_project_context or "").strip()
     if coding_mode and um:
-        reasoning = "Coding mode: user routed to the Python sandbox agent."
-        next_s = "1. Use repository snapshot if present 2. Generate code 3. Run in sandbox"
+        reasoning = "Coding mode: user routed to the coding agent (sandbox + optional workspace file updates)."
+        next_s = (
+            "1. Use the project snapshot (open folder) for paths and file bodies. "
+            "2. Run Python in the sandbox when analysis, plots, or computation are needed; otherwise propose file updates directly. "
+            "3. Emit full files as ada-file fences so the UI can diff and the user can apply changes locally."
+        )
         if ctx:
             reasoning += " Project folder snapshot is attached for this turn."
         return _decision_with_agents(

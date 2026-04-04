@@ -10,6 +10,7 @@ from tools.python_sandbox import extract_python_fences, run_sandboxed_python
 from tools.sandbox_markdown import redact_sandbox_result_dict, redact_image_stdout, stdout_to_markdown_body
 
 _MAX_PROJECT_CONTEXT_CHARS = 20_000
+_MIN_CTX_FOR_WORKSPACE_PROPOSE = 80
 
 _CODING_GEN_SYSTEM = """You are Ada's coding agent. The user gave a task that should be solved with Python code running in a secure sandbox—not by clicking the desktop.
 
@@ -31,6 +32,111 @@ Example for "factorial of 10":
 {"code": "import math\\nprint(math.factorial(10))"}
 """
 
+_CODING_LINKED_PROJECT_NOTE = """
+**Linked project folder:** The snapshot below lists real paths and file bodies from the user's open folder (read-only to you).
+Your Python **cannot** modify those files on disk. When they ask you to fix, implement, or refactor **project** code,
+still output runnable JSON `{"code": "..."}` here for any analysis or helpers; a dedicated step will emit full updated
+files for their UI diff/apply flow—do not try to put file contents inside JSON.
+"""
+
+
+def _likely_repo_edit_without_sandbox(goal: str) -> bool:
+    """
+    Heuristic: task is primarily editing/linking project files, without requiring sandbox plots/compute as the main ask.
+    When True, we skip Python execution and go straight to workspace file proposals from the snapshot.
+    """
+    g = (goal or "").lower().strip()
+    if not g:
+        return False
+    if g.startswith(("what is ", "what are ", "explain ", "describe ", "summarize ", "overview ", "list ")):
+        if not any(x in g for x in ("fix", "bug", "change", "update", "implement", "refactor", "add ", "remove ")):
+            return False
+    analysis_first = (
+        "plot ",
+        "chart",
+        "graph ",
+        "histogram",
+        "yfinance",
+        "correlation",
+        "simulate",
+        "run a backtest",
+        "dataframe",
+        "numpy ",
+        "matplotlib",
+    )
+    path_touch = any(
+        x in g
+        for x in (
+            ".tsx",
+            ".jsx",
+            ".ts",
+            ".js",
+            ".mjs",
+            ".cjs",
+            ".py",
+            ".css",
+            ".scss",
+            ".html",
+            ".json",
+            "src/",
+            "app/",
+            "components/",
+            "pages/",
+            "lib/",
+            "backend/",
+            "frontend/",
+            "folder ",
+            "repository",
+            "codebase",
+            "readme",
+            "dockerfile",
+            "package.json",
+            "pyproject.toml",
+        )
+    )
+    repo_signals = (
+        "fix ",
+        "bug",
+        "refactor",
+        "add ",
+        "remove ",
+        "delete ",
+        "change ",
+        "update ",
+        "edit ",
+        "modify ",
+        "rename ",
+        "create file",
+        "new file",
+        "file ",
+        "component",
+        "hook",
+        "eslint",
+        "typescript",
+        "broken",
+        "doesn't work",
+        "does not work",
+        "not working",
+        "error in",
+    )
+    implement_touch = "implement" in g and (
+        path_touch or "project" in g or "feature" in g or "file" in g or "component" in g or "ui" in g or "api" in g
+    )
+    has_repo = any(s in g for s in repo_signals) or implement_touch
+    has_heavy_analysis = sum(1 for s in analysis_first if s in g) >= 2 and not has_repo
+    if has_heavy_analysis:
+        return False
+    if any(s in g for s in analysis_first) and not has_repo:
+        return False
+    pure_algo = any(x in g for x in ("factorial", "fibonacci", "leetcode", "sorting algorithm", "binary search"))
+    if pure_algo and not path_touch:
+        return False
+    return has_repo and (
+        path_touch
+        or implement_touch
+        or any(s in g for s in ("fix ", "bug", "broken", "error", "refactor", "update ", "edit ", "add "))
+    )
+
 
 def _propose_workspace_file_fences(
     goal: str,
@@ -40,36 +146,46 @@ def _propose_workspace_file_fences(
     provider: str,
 ) -> str:
     """
-    Second LLM pass: emit ```ada-file:...``` blocks when the sandbox task implies repo edits.
-    Returns extra markdown to append (empty if none). Caller strips fences for the chat payload.
+    LLM pass: emit ```ada-file:...``` blocks with full file bodies. Caller strips fences for chat and sends file_edits to UI.
     """
     ctx = (project_context or "").strip()
-    if len(ctx) < 80:
+    if len(ctx) < _MIN_CTX_FOR_WORKSPACE_PROPOSE:
         return ""
     mod = get_llm_client(provider)
     client = mod._client(api_key)
     model = getattr(mod, "CHAT_MODEL", "gpt-4o")
     system = (
-        "You propose updates to the user's repository files after a coding-agent (Python sandbox) run. "
-        "The sandbox cannot edit the user's disk.\n\n"
-        "If the user's task requires changing source files in their project, output ONLY markdown fences. "
-        "Each fence:\n"
-        "- Opening line: a markdown fence ``` then `ada-file:relative/path.ext` then newline\n"
-        "- Then the COMPLETE new file text\n"
-        "- Closing line: ```\n"
-        "Use forward slashes. Full files only.\n\n"
-        "If no project files need changes, reply with exactly: NO_EDITS"
+        "You are Ada's **workspace file writer**. The user has a project folder open in the app. You receive a markdown "
+        "snapshot that lists relative paths and the current contents of many text files (excerpts may be truncated).\n\n"
+        "**Job:** Produce the **actual file updates** the user asked for—not suggestions in prose. You must emit the "
+        "**complete new text** for every file you change so the app can show a line diff and the user can apply it "
+        "to their disk.\n\n"
+        "**How to output updates (required format):**\n"
+        "- For each file you modify or create, output one markdown fence.\n"
+        "- **Opening line** is exactly: ```ada-file:relative/path/from/project/root.ext (then newline). Use forward slashes only.\n"
+        "- Next lines: the **entire** file content after your edits (not a patch, not a snippet—full file).\n"
+        "- **Closing line**: ``` (three backticks) alone.\n\n"
+        "**Rules:**\n"
+        "- Prefer paths that **already appear** in the snapshot. If the user asks for a **new** file, pick a sensible path "
+        "next to related files.\n"
+        "- If the snapshot shows only part of a file, **reconstruct** a consistent full file: keep unchanged regions as they "
+        "appear in the snapshot and integrate edits; do not leave placeholders like TODO unless the user asked for them.\n"
+        "- Small, purely informational questions about the repo with **no** requested code change → reply exactly: NO_EDITS\n"
+        "- Tasks that are **only** Python/math/plots with no repo edit → NO_EDITS\n"
+        "- Otherwise, when the user wants code/files fixed or added in their project, you **must** output ada-file blocks.\n\n"
+        "Do not wrap ada-file fences inside another outer code fence. No prose before or after the fences except NO_EDITS."
     )
     user = (
-        f"User task:\n{goal[:3000]}\n\n"
-        f"Repository snapshot (truncated):\n{ctx[:16000]}\n\n"
-        f"Agent answer (markdown):\n{(agent_reply or '')[:10000]}\n\n"
-        "Respond with NO_EDITS or ada-file blocks only."
+        f"## User task (do this in the repo)\n{goal[:4000]}\n\n"
+        f"## Repository snapshot (paths + file bodies; use as source of truth)\n{ctx[:20000]}\n\n"
+        "## Context from the coding agent turn (may include sandbox output or a short summary)\n"
+        f"{(agent_reply or '')[:12000]}\n\n"
+        "Output NO_EDITS or only ```ada-file:...``` fences as specified."
     )
     create_kw: dict = {
         "model": model,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        **chat_completion_limit_kwargs(provider, model, 12000),
+        **chat_completion_limit_kwargs(provider, model, 24000),
     }
     if not should_omit_temperature(provider, model):
         create_kw["temperature"] = 0.1
@@ -81,6 +197,32 @@ def _propose_workspace_file_fences(
     if not raw or raw.upper() == "NO_EDITS" or raw.split("\n", 1)[0].strip().upper() == "NO_EDITS":
         return ""
     return "\n\n" + raw
+
+
+def _workspace_proposals_append(
+    goal: str,
+    ctx_full: str,
+    reply_so_far: str,
+    api_key: str,
+    provider: str,
+    on_step: Optional[Callable] = None,
+    *,
+    notify_step_index: int = 2,
+) -> str:
+    """Notify UI, run workspace proposal LLM, return markdown to append (may be empty)."""
+    if len(ctx_full) < _MIN_CTX_FOR_WORKSPACE_PROPOSE:
+        return ""
+    if on_step:
+        on_step(
+            notify_step_index,
+            "Preparing proposed file updates from your project snapshot…",
+            "workspace_edits",
+            "The model reads paths and bodies from the snapshot and emits full files for the diff panel.",
+            None,
+            False,
+            screenshot_base64=None,
+        )
+    return _propose_workspace_file_fences(goal, ctx_full, reply_so_far, api_key, provider)
 
 
 def _parse_code_from_llm(raw: str) -> Optional[str]:
@@ -121,6 +263,48 @@ def run_coding_agent(
     if not goal:
         return "No task provided.", {}
 
+    ctx_full = (project_context or "").strip()
+    if len(ctx_full) > _MAX_PROJECT_CONTEXT_CHARS:
+        ctx_full = ctx_full[: _MAX_PROJECT_CONTEXT_CHARS].rstrip() + "\n\n…"
+
+    if len(ctx_full) > 100 and _likely_repo_edit_without_sandbox(goal):
+        plan = (
+            "Plan:\n"
+            "  1. Use the repository snapshot (from the user's currently open folder) to find paths and current file bodies.\n"
+            "  2. Emit **complete updated files** as ada-file markdown fences for the in-app diff and apply flow.\n"
+            "  3. Skip the Python sandbox—this task does not require executed analysis code.\n"
+        )
+        if on_step:
+            on_step(0, plan, "plan", plan, None, False, screenshot_base64=None)
+        intro = (
+            f"**Coding task:** {goal}\n\n"
+            "Generating **concrete file updates** from your linked project. When proposals appear, use "
+            "**Review file changes** to preview diffs and **apply** them to your folder.\n\n"
+        )
+        extra = _workspace_proposals_append(
+            goal, ctx_full, intro, api_key, provider, on_step, notify_step_index=1
+        )
+        reply = intro + (
+            extra
+            if extra
+            else "_No file proposals were returned. Name the path, paste the error, or describe the change more specifically._\n"
+        )
+        if on_step:
+            on_step(
+                2,
+                "Workspace proposals ready." if extra else "No automatic proposals.",
+                "done",
+                reply[:500] + ("…" if len(reply) > 500 else ""),
+                None,
+                True,
+                screenshot_base64=None,
+            )
+        return reply, {
+            "name": "workspace_file_proposal",
+            "input": goal[:4000],
+            "result": "ada-file proposals" if extra else "NO_EDITS",
+        }
+
     mod = get_llm_client(provider)
     client = mod._client(api_key)
     model = getattr(mod, "CHAT_MODEL", "gpt-4o")
@@ -130,16 +314,17 @@ def run_coding_agent(
         "  1. Interpret the task as computation, data analysis, or visualization (sandbox).\n"
         "  2. Generate Python (stdlib + numpy/pandas/matplotlib/yfinance as needed).\n"
         "  3. Execute in the isolated sandbox and return stdout.\n"
+        "  4. If a project snapshot is linked, a follow-up step proposes full-file updates for the diff UI.\n"
     )
     if on_step:
         on_step(0, plan, "plan", plan, None, False, screenshot_base64=None)
 
-    ctx = (project_context or "").strip()
-    if len(ctx) > _MAX_PROJECT_CONTEXT_CHARS:
-        ctx = ctx[: _MAX_PROJECT_CONTEXT_CHARS].rstrip() + "\n\n…"
     user_msg = f"Task:\n{goal}\n\n"
-    if ctx:
-        user_msg += f"Project repository snapshot (read-only; your code cannot open these paths):\n{ctx}\n\n"
+    if ctx_full:
+        user_msg += (
+            f"Project repository snapshot (read-only; your code cannot open these paths):\n{ctx_full}\n\n"
+            f"{_CODING_LINKED_PROJECT_NOTE.strip()}\n\n"
+        )
     user_msg += 'Output ONLY JSON: {"code": "..."}'
 
     def call_llm(follow_ups: Optional[list[dict]] = None) -> str:
@@ -168,8 +353,17 @@ def run_coding_agent(
             f"{raw[:1500]}"
         )
         tool_used = {"name": "python_sandbox", "input": goal[:500], "result": raw[:2000]}
+        extra = ""
+        if len(ctx_full) >= _MIN_CTX_FOR_WORKSPACE_PROPOSE:
+            extra = _workspace_proposals_append(
+                goal, ctx_full, reply, api_key, provider, on_step, notify_step_index=1
+            )
+        if extra:
+            reply = reply + extra
+            tool_used["workspace_proposals"] = "appended"
+        err_step = 2 if len(ctx_full) >= _MIN_CTX_FOR_WORKSPACE_PROPOSE else 1
         if on_step:
-            on_step(1, "Parse failed", "error", raw[:200], None, True, screenshot_base64=None)
+            on_step(err_step, "Parse failed", "error", raw[:200], None, True, screenshot_base64=None)
         return reply, tool_used
 
     if on_step:
@@ -219,22 +413,26 @@ def run_coding_agent(
             f"{body}\n\n"
             "_Executed in the restricted Python sandbox (no desktop automation)._"
         )
+        extra = ""
+        if len(ctx_full) >= _MIN_CTX_FOR_WORKSPACE_PROPOSE:
+            extra = _workspace_proposals_append(
+                goal, ctx_full, reply, api_key, provider, on_step, notify_step_index=2
+            )
+        if extra:
+            reply = reply + extra
         if on_step:
             _preview = redact_image_stdout(stdout)
+            done_idx = 3 if len(ctx_full) >= _MIN_CTX_FOR_WORKSPACE_PROPOSE else 2
             on_step(
-                2,
-                "Sandbox run succeeded.",
+                done_idx,
+                "Sandbox run succeeded."
+                + (" Proposed project file updates were added—check the file review panel." if extra else ""),
                 "done",
                 _preview[:300] + ("…" if len(_preview) > 300 else ""),
                 _preview[:1200] + ("…" if len(_preview) > 1200 else ""),
                 True,
                 screenshot_base64=None,
             )
-        ctx_full = (project_context or "").strip()
-        if ctx_full:
-            extra = _propose_workspace_file_fences(goal, ctx_full, reply, api_key, provider)
-            if extra:
-                reply = reply + extra
     else:
         err = result.get("error") or "unknown error"
         tb = (result.get("traceback") or "")[:2000]
@@ -243,7 +441,24 @@ def run_coding_agent(
             f"Sandbox run failed: **{err}**\n\n"
             f"```\n{tb}\n```"
         )
+        extra = ""
+        if len(ctx_full) >= _MIN_CTX_FOR_WORKSPACE_PROPOSE:
+            extra = _workspace_proposals_append(
+                goal, ctx_full, reply, api_key, provider, on_step, notify_step_index=2
+            )
+        if extra:
+            reply = reply + extra
         if on_step:
-            on_step(2, f"Sandbox failed: {err}", "done", err, None, True, screenshot_base64=None)
+            done_idx = 3 if len(ctx_full) >= _MIN_CTX_FOR_WORKSPACE_PROPOSE else 2
+            on_step(
+                done_idx,
+                f"Sandbox failed: {err}"
+                + (" — file-change proposals were still generated from the snapshot when possible." if extra else ""),
+                "done",
+                err,
+                None,
+                True,
+                screenshot_base64=None,
+            )
 
     return reply, tool_used

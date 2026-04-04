@@ -10,7 +10,6 @@ import {
   readChatLog,
   createNewChat,
   deleteChat,
-  sendMessage,
   sendMessageStream,
   sendMessageWithFiles,
   appendChatLog,
@@ -51,6 +50,7 @@ import {
 } from './projectFileCache'
 import { getActiveFileMention, rankProjectPathMatches } from './projectPathSuggest'
 import { ProjectFileTree } from './ProjectFileTree'
+import { CodingEditSummaryCards } from './CodingEditSummaryCards'
 import { WorkspaceFileReview } from './WorkspaceFileReview'
 import { stripAdaFileFencesForDisplay } from './workspaceFileEdits'
 import {
@@ -299,17 +299,25 @@ function ChatFilePreview({ preview, onClose, onSave, colorScheme }) {
       return
     }
     setDraft(preview.body ?? '')
-  }, [preview?.relPath, preview?.loading, preview?.error, preview?.body, preview?.kind])
+  }, [
+    preview?.relPath,
+    preview?.loading,
+    preview?.error,
+    preview?.body,
+    preview?.kind,
+  ]) // eslint-disable-line react-hooks/exhaustive-deps -- resync when fields change, not preview reference identity
 
-  if (!preview) return null
-  const { title, loading, error, source } = preview
-  const body = preview.body ?? ''
-  const isImage = preview.kind === 'image'
-  const dirty = !loading && !error && !isImage && draft !== body
-  const showEditor = !loading && !error && !isImage
+  const title = preview?.title ?? ''
+  const loading = !!preview?.loading
+  const error = preview?.error ?? null
+  const source = preview?.source ?? null
+  const body = preview?.body ?? ''
+  const isImage = preview?.kind === 'image'
+  const dirty = !!preview && !loading && !error && !isImage && draft !== body
+  const showEditor = !!preview && !loading && !error && !isImage
 
   const handleSave = useCallback(async () => {
-    if (!onSave || !preview.relPath || saving || !dirty) return
+    if (!onSave || !preview?.relPath || saving || !dirty) return
     setSaving(true)
     setSaveError(null)
     setSaveFlash(null)
@@ -328,7 +336,7 @@ function ChatFilePreview({ preview, onClose, onSave, colorScheme }) {
     } finally {
       setSaving(false)
     }
-  }, [onSave, preview.relPath, saving, dirty, draft])
+  }, [onSave, preview?.relPath, saving, dirty, draft])
 
   useEffect(() => {
     saveHotkeyRef.current = () => {
@@ -340,7 +348,7 @@ function ChatFilePreview({ preview, onClose, onSave, colorScheme }) {
   const cmExtensions = useMemo(
     () => [
       ...themeExtensionsForScheme(scheme),
-      ...languageExtensionsForPath(preview.relPath),
+      ...languageExtensionsForPath(preview?.relPath ?? ''),
       Prec.highest(
         keymap.of([
           {
@@ -353,7 +361,7 @@ function ChatFilePreview({ preview, onClose, onSave, colorScheme }) {
         ]),
       ),
     ],
-    [scheme, preview.relPath],
+    [scheme, preview?.relPath],
   )
 
   const onCreateEditor = useCallback((view) => {
@@ -376,6 +384,8 @@ function ChatFilePreview({ preview, onClose, onSave, colorScheme }) {
       editorViewRef.current = null
     }
   }, [preview?.relPath])
+
+  if (!preview) return null
 
   return (
     <div className="chat-file-preview" role="region" aria-label="Open file">
@@ -700,6 +710,9 @@ function App() {
   const [filePreview, setFilePreview] = useState(null)
   /** Pending ```ada-file``` edits from last assistant turn (review before apply). */
   const [pendingWorkspaceEdits, setPendingWorkspaceEdits] = useState(null)
+  const [workspaceReviewFileIndex, setWorkspaceReviewFileIndex] = useState(0)
+  /** Paths removed from the review queue (kept/discarded) so the right-rail cards stay in sync. */
+  const [workspaceReviewHiddenPaths, setWorkspaceReviewHiddenPaths] = useState(() => new Set())
   const [workspaceUndoTick, setWorkspaceUndoTick] = useState(0)
   const [workspaceUndoUi, setWorkspaceUndoUi] = useState({ canUndo: false, canRedo: false })
 
@@ -710,6 +723,24 @@ function App() {
   useEffect(() => {
     if (!codingModeEnabled || workspaceRelPaths.length === 0) setFileMention(null)
   }, [codingModeEnabled, workspaceRelPaths.length])
+
+  useEffect(() => {
+    setWorkspaceReviewFileIndex(0)
+    setWorkspaceReviewHiddenPaths(new Set())
+  }, [pendingWorkspaceEdits?.id])
+
+  const visibleWorkspaceEditsSession = useMemo(() => {
+    if (!pendingWorkspaceEdits?.files?.length) return null
+    const files = pendingWorkspaceEdits.files.filter((f) => !workspaceReviewHiddenPaths.has(f.path))
+    if (!files.length) return null
+    return { ...pendingWorkspaceEdits, files }
+  }, [pendingWorkspaceEdits, workspaceReviewHiddenPaths])
+
+  useEffect(() => {
+    const n = visibleWorkspaceEditsSession?.files?.length ?? 0
+    if (n === 0) return
+    setWorkspaceReviewFileIndex((i) => Math.min(Math.max(0, i), n - 1))
+  }, [visibleWorkspaceEditsSession?.files?.length])
 
   const syncFileMentionFromCaret = useCallback(
     (value, cursorPos, kind) => {
@@ -1237,9 +1268,13 @@ function App() {
           screenshotPendingRef.current[step] = p.screenshot
           return prev
         })
-      } catch {}
+      } catch {
+        /* ignore */
+      }
     }
-    ws.onclose = () => {}
+    ws.onclose = () => {
+      /* ignore */
+    }
     wsRef.current = ws
     return () => {
       ws.close()
@@ -1477,7 +1512,9 @@ function App() {
 
     try {
       await appendChatLog('user', displayText)
-    } catch {}
+    } catch {
+      /* ignore */
+    }
 
     try {
       let chatId = currentChatId
@@ -1587,7 +1624,9 @@ function App() {
       appendMessage(msg, false)
       try {
         await appendChatLog('assistant', msg)
-      } catch {}
+      } catch {
+        /* ignore */
+      }
     }
     setSending(false)
     refreshChatList()
@@ -1631,6 +1670,236 @@ function App() {
       handleSend({})
     }
   }
+
+  const chatMainInner = (
+    <>
+      <div className="chat-messages">
+        {messages.map((msg, i) => (
+          <div key={i} className={`msg ${msg.role === 'user' ? 'msg-user' : msg.role === 'tool' ? 'msg-tool' : 'msg-bot'}`}>
+            {msg.role === 'user' ? (
+              <span className="msg-text">{msg.content}</span>
+            ) : msg.role === 'tool' ? (
+              <ToolMessageCard content={msg.content} />
+            ) : (
+              <div className="msg-bot-body">
+                <div className="msg-markdown">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={markdownUrlTransform}>
+                    {msg.content}
+                  </ReactMarkdown>
+                </div>
+                <CopyResponseButton text={msg.content} />
+              </div>
+            )}
+          </div>
+        ))}
+        {(sending || liveReply || streamTimeline.length > 0) && (
+          <div className="msg msg-bot msg-streaming">
+            {streamTimeline.length > 0 && (
+              <div className="stream-timeline" aria-live="polite">
+                {streamTimeline.map((item, i) => (
+                  <div
+                    key={i}
+                    className={`stream-timeline-row stream-timeline-${item.kind} stream-phase-${item.phase || ''}${item.screenshot ? ' stream-timeline-has-screenshot' : ''}`}
+                  >
+                    <span className="stream-timeline-dot" aria-hidden />
+                    <div className="stream-timeline-body">
+                      <div className="stream-timeline-title">{item.message}</div>
+                      {item.detail ? (
+                        <div className="stream-timeline-detail">{item.detail}</div>
+                      ) : null}
+                      {item.screenshot ? (
+                        <div className="stream-timeline-screenshot-wrap">
+                          <img
+                            src={`data:image/png;base64,${item.screenshot}`}
+                            alt={`Step ${item.step ?? i} screenshot`}
+                            className="stream-timeline-screenshot"
+                            loading="lazy"
+                          />
+                          <span className="stream-timeline-screenshot-label">Screenshot used for this step</span>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {liveReply ? (
+              <div className="msg-bot-body msg-stream-reply-body">
+                <div className="msg-markdown stream-reply-md">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={markdownUrlTransform}>
+                    {liveReply}
+                  </ReactMarkdown>
+                </div>
+                <CopyResponseButton text={liveReply} />
+              </div>
+            ) : null}
+          </div>
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+      <div className="chat-input-area">
+        {attachments.length > 0 && (
+          <div className="chat-attachments">
+            {attachments.map((f, i) => (
+              <span key={i} className="chat-attachment">
+                <span className="chat-attachment-name" title={f.name}>
+                  {f.name}
+                </span>
+                <button
+                  type="button"
+                  className="chat-attachment-remove"
+                  aria-label="Remove"
+                  onClick={() => removeAttachment(i)}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="chat-input-row">
+          <div className="chat-add-wrap" ref={addMenuRef}>
+            <button
+              type="button"
+              id="chat-add"
+              className="chat-add-btn"
+              aria-label="Attach files or enable web search"
+              aria-expanded={addMenuOpen}
+              aria-haspopup="menu"
+              onClick={() => setAddMenuOpen((o) => !o)}
+            >
+              +
+            </button>
+            {addMenuOpen ? (
+              <div className="chat-add-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="chat-add-menu-item"
+                  onClick={() => {
+                    setAddMenuOpen(false)
+                    handleAttach()
+                  }}
+                >
+                  {CLIP_MENU_ICON}
+                  <span className="chat-add-menu-label">Attach</span>
+                  <span className="chat-add-menu-hint">files</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`chat-add-menu-item${webSearchMode ? ' chat-add-menu-item--active' : ''}`}
+                  aria-pressed={webSearchMode}
+                  onClick={toggleWebSearchMode}
+                >
+                  {GLOBE_MENU_ICON}
+                  <span className="chat-add-menu-label">Web search</span>
+                  <span className="chat-add-menu-hint">{webSearchMode ? 'on' : 'off'}</span>
+                </button>
+              </div>
+            ) : null}
+          </div>
+          <input type="file" ref={fileInputRef} style={{ display: 'none' }} multiple onChange={onFileChange} />
+          <div className="chat-input-composer">
+            {fileMention && codingModeEnabled && workspaceRelPaths.length > 0 ? (
+              <div
+                id="chat-file-mention-list"
+                className="chat-file-mention"
+                role="listbox"
+                aria-label="Project files"
+              >
+                {fileMention.matches.length === 0 ? (
+                  <div className="chat-file-mention-empty" role="option">
+                    No matching files
+                  </div>
+                ) : (
+                  <>
+                    {fileMention.selectedPaths?.length > 0 ? (
+                      <div className="chat-file-mention-hint">
+                        {fileMention.selectedPaths.length} selected — Enter to insert · Space to toggle row ·
+                        Ctrl/⌘-click rows
+                      </div>
+                    ) : (
+                      <div className="chat-file-mention-hint chat-file-mention-hint--subtle">
+                        Ctrl/⌘-click to select multiple, Enter to insert · click inserts one
+                      </div>
+                    )}
+                    {fileMention.matches.map((rel, i) => {
+                      const picked = fileMention.selectedPaths?.includes(rel)
+                      return (
+                        <button
+                          key={rel}
+                          type="button"
+                          role="option"
+                          id={`chat-file-mention-${i}`}
+                          aria-selected={picked || i === fileMention.highlight}
+                          className={`chat-file-mention-item${i === fileMention.highlight ? ' chat-file-mention-item--active' : ''}${picked ? ' chat-file-mention-item--picked' : ''}`}
+                          onMouseEnter={() =>
+                            setFileMention((fm) => (fm ? { ...fm, highlight: i } : null))
+                          }
+                          onMouseDown={(ev) => {
+                            ev.preventDefault()
+                            if (ev.ctrlKey || ev.metaKey) {
+                              toggleFileMentionSelect(rel)
+                            } else {
+                              applyFileMention(rel)
+                            }
+                          }}
+                        >
+                          {picked ? (
+                            <span className="chat-file-mention-check" aria-hidden>
+                              ✓
+                            </span>
+                          ) : (
+                            <span className="chat-file-mention-check-spacer" aria-hidden />
+                          )}
+                          <span className="chat-file-mention-path">{rel}</span>
+                        </button>
+                      )
+                    })}
+                  </>
+                )}
+              </div>
+            ) : null}
+            <textarea
+              ref={chatInputRef}
+              id="chat-input"
+              placeholder={
+                codingModeEnabled && workspaceSnapshot.trim()
+                  ? 'Message Ada… @file — Ctrl+click several, Enter to insert'
+                  : webSearchMode
+                    ? 'Message Ada… (each send uses the web: top results inform the reply)'
+                    : 'Message Ada…'
+              }
+              rows={1}
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value)
+                syncFileMentionFromCaret(e.target.value, e.target.selectionStart, 'input')
+              }}
+              onSelect={(e) => {
+                syncFileMentionFromCaret(e.target.value, e.target.selectionStart, 'select')
+              }}
+              onClick={(e) => {
+                syncFileMentionFromCaret(e.target.value, e.target.selectionStart, 'select')
+              }}
+              onKeyDown={handleKeyDown}
+              disabled={sending}
+              autoComplete="off"
+              aria-autocomplete={fileMention ? 'list' : undefined}
+              aria-controls={fileMention ? 'chat-file-mention-list' : undefined}
+              aria-expanded={Boolean(
+                fileMention && codingModeEnabled && workspaceRelPaths.length > 0,
+              )}
+            />
+          </div>
+          <button type="button" id="chat-send" onClick={() => handleSend({})} disabled={sending}>
+            Send
+          </button>
+        </div>
+      </div>
+    </>
+  )
 
   return (
     <div className="app">
@@ -1743,7 +2012,9 @@ function App() {
           </button>
         </nav>
       </header>
-      <div className="app-body">
+      <div
+        className={`app-body${codingModeEnabled && panel === 'chats' ? ' app-body--coding-chats' : ''}`}
+      >
         {codingModeEnabled ? (
         <aside className="sidebar sidebar--explorer" aria-label="Project explorer">
           <div className="sidebar-panel sidebar-panel--explorer">
@@ -1851,7 +2122,99 @@ function App() {
           </div>
         </aside>
         ) : null}
-        <div className="main-column">
+        {codingModeEnabled && panel === 'chats' ? (
+          <div className="main-column main-column--coding-ide">
+            <div className="coding-workbench">
+              {visibleWorkspaceEditsSession ? (
+                <WorkspaceFileReview
+                  variant="workbench"
+                  session={visibleWorkspaceEditsSession}
+                  workspaceLabel={workspaceDisplayLabel() || ''}
+                  resolveBaseContent={resolveWorkspaceFileBase}
+                  onWriteFile={saveProjectFile}
+                  onDismiss={() => {
+                    setPendingWorkspaceEdits(null)
+                    setWorkspaceReviewHiddenPaths(new Set())
+                  }}
+                  onOpenFile={openProjectFile}
+                  activeFileIndex={workspaceReviewFileIndex}
+                  onActiveFileIndexChange={setWorkspaceReviewFileIndex}
+                  onFileRemovedFromQueue={(p) =>
+                    setWorkspaceReviewHiddenPaths((s) => new Set(s).add(p))
+                  }
+                />
+              ) : filePreview ? (
+                <ChatFilePreview
+                  preview={filePreview}
+                  onClose={() => setFilePreview(null)}
+                  onSave={saveProjectFile}
+                  colorScheme={colorScheme}
+                />
+              ) : (
+                <div className="coding-workbench-empty">
+                  <div className="coding-workbench-empty__inner">
+                    <h2 className="coding-workbench-empty__title">Coding workspace</h2>
+                    <p className="coding-workbench-empty__text">
+                      Open a file from the tree to preview it here, or send a message so Ada can propose edits—diffs
+                      appear in this pane for review.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="coding-chat-rail">
+              <header className="chat-rail-header">
+                <div className="chat-rail-header__titles">
+                  <span className="chat-rail-header__kicker">Coding mode</span>
+                  <span className="chat-rail-header__project" title={workspaceDisplayLabel() || ''}>
+                    {workspaceSnapshot.trim() ? workspaceDisplayLabel() || 'Project linked' : 'No folder linked'}
+                  </span>
+                </div>
+              </header>
+              {visibleWorkspaceEditsSession ? (
+                <CodingEditSummaryCards
+                  session={visibleWorkspaceEditsSession}
+                  resolveBaseContent={resolveWorkspaceFileBase}
+                  activePath={visibleWorkspaceEditsSession.files[workspaceReviewFileIndex]?.path}
+                  onSelectPath={(path) => {
+                    const i = visibleWorkspaceEditsSession.files.findIndex((f) => f.path === path)
+                    if (i >= 0) setWorkspaceReviewFileIndex(i)
+                  }}
+                />
+              ) : null}
+              <div className="chat-container chat-container--rail">{chatMainInner}</div>
+              <ChatTerminalPanel />
+              <footer className="app-context-footer app-context-footer--chat-rail" role="status">
+                <div className="app-context-footer__cluster">
+                  {workspaceSnapshot.trim() ? (
+                    <>
+                      <span className="app-context-footer__badge" title={workspaceDisplayLabel()}>
+                        {REPO_FOLDER_ICON}
+                        <span className="app-context-footer__badge-text">{workspaceDisplayLabel()}</span>
+                      </span>
+                      <span className="app-context-footer__path" title="Browser-built index">
+                        Local folder (browser index)
+                      </span>
+                    </>
+                  ) : (
+                    <span className="app-context-footer__idle">No project linked</span>
+                  )}
+                </div>
+                <div className="app-context-footer__actions">
+                  <button
+                    type="button"
+                    className="app-context-footer__linkish"
+                    onClick={() => pickLocalProjectFolder()}
+                    disabled={projectImportBusy || sending}
+                  >
+                    {projectImportBusy ? 'Reading…' : 'Open folder'}
+                  </button>
+                </div>
+              </footer>
+            </div>
+          </div>
+        ) : (
+          <div className="main-column">
         {panel === 'chats' ? (
         <div className={`chat-container${filePreview ? ' chat-container--file-preview-open' : ''}`}>
           <ChatFilePreview
@@ -1860,241 +2223,7 @@ function App() {
             onSave={codingModeEnabled ? saveProjectFile : null}
             colorScheme={colorScheme}
           />
-          {codingModeEnabled && pendingWorkspaceEdits ? (
-            <WorkspaceFileReview
-              session={pendingWorkspaceEdits}
-              workspaceLabel={workspaceDisplayLabel() || ''}
-              resolveBaseContent={resolveWorkspaceFileBase}
-              onWriteFile={saveProjectFile}
-              onDismiss={() => setPendingWorkspaceEdits(null)}
-              onOpenFile={openProjectFile}
-            />
-          ) : null}
-          <div className="chat-messages">
-            {messages.map((msg, i) => (
-              <div key={i} className={`msg ${msg.role === 'user' ? 'msg-user' : msg.role === 'tool' ? 'msg-tool' : 'msg-bot'}`}>
-                {msg.role === 'user' ? (
-                  <span className="msg-text">{msg.content}</span>
-                ) : msg.role === 'tool' ? (
-                  <ToolMessageCard content={msg.content} />
-                ) : (
-                  <div className="msg-bot-body">
-                    <div className="msg-markdown">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={markdownUrlTransform}>
-                        {msg.content}
-                      </ReactMarkdown>
-                    </div>
-                    <CopyResponseButton text={msg.content} />
-                  </div>
-                )}
-              </div>
-            ))}
-            {(sending || liveReply || streamTimeline.length > 0) && (
-              <div className="msg msg-bot msg-streaming">
-                {streamTimeline.length > 0 && (
-                  <div className="stream-timeline" aria-live="polite">
-                    {streamTimeline.map((item, i) => (
-                      <div
-                        key={i}
-                        className={`stream-timeline-row stream-timeline-${item.kind} stream-phase-${item.phase || ''}${item.screenshot ? ' stream-timeline-has-screenshot' : ''}`}
-                      >
-                        <span className="stream-timeline-dot" aria-hidden />
-                        <div className="stream-timeline-body">
-                          <div className="stream-timeline-title">{item.message}</div>
-                          {item.detail ? (
-                            <div className="stream-timeline-detail">{item.detail}</div>
-                          ) : null}
-                          {item.screenshot ? (
-                            <div className="stream-timeline-screenshot-wrap">
-                              <img
-                                src={`data:image/png;base64,${item.screenshot}`}
-                                alt={`Step ${item.step ?? i} screenshot`}
-                                className="stream-timeline-screenshot"
-                                loading="lazy"
-                              />
-                              <span className="stream-timeline-screenshot-label">Screenshot used for this step</span>
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {liveReply ? (
-                  <div className="msg-bot-body msg-stream-reply-body">
-                    <div className="msg-markdown stream-reply-md">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={markdownUrlTransform}>
-                      {liveReply}
-                    </ReactMarkdown>
-                    </div>
-                    <CopyResponseButton text={liveReply} />
-                  </div>
-                ) : null}
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-          <div className="chat-input-area">
-            {attachments.length > 0 && (
-              <div className="chat-attachments">
-                {attachments.map((f, i) => (
-                  <span key={i} className="chat-attachment">
-                    <span className="chat-attachment-name" title={f.name}>
-                      {f.name}
-                    </span>
-                    <button
-                      type="button"
-                      className="chat-attachment-remove"
-                      aria-label="Remove"
-                      onClick={() => removeAttachment(i)}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-            <div className="chat-input-row">
-              <div className="chat-add-wrap" ref={addMenuRef}>
-                <button
-                  type="button"
-                  id="chat-add"
-                  className="chat-add-btn"
-                  aria-label="Attach files or enable web search"
-                  aria-expanded={addMenuOpen}
-                  aria-haspopup="menu"
-                  onClick={() => setAddMenuOpen((o) => !o)}
-                >
-                  +
-                </button>
-                {addMenuOpen ? (
-                  <div className="chat-add-menu" role="menu">
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="chat-add-menu-item"
-                      onClick={() => {
-                        setAddMenuOpen(false)
-                        handleAttach()
-                      }}
-                    >
-                      {CLIP_MENU_ICON}
-                      <span className="chat-add-menu-label">Attach</span>
-                      <span className="chat-add-menu-hint">files</span>
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className={`chat-add-menu-item${webSearchMode ? ' chat-add-menu-item--active' : ''}`}
-                      aria-pressed={webSearchMode}
-                      onClick={toggleWebSearchMode}
-                    >
-                      {GLOBE_MENU_ICON}
-                      <span className="chat-add-menu-label">Web search</span>
-                      <span className="chat-add-menu-hint">{webSearchMode ? 'on' : 'off'}</span>
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-              <input type="file" ref={fileInputRef} style={{ display: 'none' }} multiple onChange={onFileChange} />
-              <div className="chat-input-composer">
-                {fileMention && codingModeEnabled && workspaceRelPaths.length > 0 ? (
-                  <div
-                    id="chat-file-mention-list"
-                    className="chat-file-mention"
-                    role="listbox"
-                    aria-label="Project files"
-                  >
-                    {fileMention.matches.length === 0 ? (
-                      <div className="chat-file-mention-empty" role="option">
-                        No matching files
-                      </div>
-                    ) : (
-                      <>
-                        {fileMention.selectedPaths?.length > 0 ? (
-                          <div className="chat-file-mention-hint">
-                            {fileMention.selectedPaths.length} selected — Enter to insert · Space to toggle row ·
-                            Ctrl/⌘-click rows
-                          </div>
-                        ) : (
-                          <div className="chat-file-mention-hint chat-file-mention-hint--subtle">
-                            Ctrl/⌘-click to select multiple, Enter to insert · click inserts one
-                          </div>
-                        )}
-                        {fileMention.matches.map((rel, i) => {
-                          const picked = fileMention.selectedPaths?.includes(rel)
-                          return (
-                            <button
-                              key={rel}
-                              type="button"
-                              role="option"
-                              id={`chat-file-mention-${i}`}
-                              aria-selected={picked || i === fileMention.highlight}
-                              className={`chat-file-mention-item${i === fileMention.highlight ? ' chat-file-mention-item--active' : ''}${picked ? ' chat-file-mention-item--picked' : ''}`}
-                              onMouseEnter={() =>
-                                setFileMention((fm) => (fm ? { ...fm, highlight: i } : null))
-                              }
-                              onMouseDown={(ev) => {
-                                ev.preventDefault()
-                                if (ev.ctrlKey || ev.metaKey) {
-                                  toggleFileMentionSelect(rel)
-                                } else {
-                                  applyFileMention(rel)
-                                }
-                              }}
-                            >
-                              {picked ? (
-                                <span className="chat-file-mention-check" aria-hidden>
-                                  ✓
-                                </span>
-                              ) : (
-                                <span className="chat-file-mention-check-spacer" aria-hidden />
-                              )}
-                              <span className="chat-file-mention-path">{rel}</span>
-                            </button>
-                          )
-                        })}
-                      </>
-                    )}
-                  </div>
-                ) : null}
-                <textarea
-                  ref={chatInputRef}
-                  id="chat-input"
-                  placeholder={
-                    codingModeEnabled && workspaceSnapshot.trim()
-                      ? 'Message Ada… @file — Ctrl+click several, Enter to insert'
-                      : webSearchMode
-                        ? 'Message Ada… (each send uses the web: top results inform the reply)'
-                        : 'Message Ada…'
-                  }
-                  rows={1}
-                  value={input}
-                  onChange={(e) => {
-                    setInput(e.target.value)
-                    syncFileMentionFromCaret(e.target.value, e.target.selectionStart, 'input')
-                  }}
-                  onSelect={(e) => {
-                    syncFileMentionFromCaret(e.target.value, e.target.selectionStart, 'select')
-                  }}
-                  onClick={(e) => {
-                    syncFileMentionFromCaret(e.target.value, e.target.selectionStart, 'select')
-                  }}
-                  onKeyDown={handleKeyDown}
-                  disabled={sending}
-                  autoComplete="off"
-                  aria-autocomplete={fileMention ? 'list' : undefined}
-                  aria-controls={fileMention ? 'chat-file-mention-list' : undefined}
-                  aria-expanded={Boolean(
-                    fileMention && codingModeEnabled && workspaceRelPaths.length > 0,
-                  )}
-                />
-              </div>
-              <button type="button" id="chat-send" onClick={() => handleSend({})} disabled={sending}>
-                Send
-              </button>
-            </div>
-          </div>
+          {chatMainInner}
           <ChatTerminalPanel />
         </div>
         ) : null}
@@ -2133,8 +2262,10 @@ function App() {
               <div className="settings-section">
                 <label className="settings-label">Coding mode</label>
                 <p className="settings-description">
-                  When enabled, the project explorer is shown and you can open a folder to send its index with
-                  messages. When disabled, chat runs without project context.
+                  When enabled, the project explorer is shown and you can open a folder so each message includes a text
+                  snapshot of that project. The coding agent uses it to propose real file updates: you get a diff review
+                  panel and can apply changes to the linked folder (or clear rejects per hunk). When disabled, chat runs
+                  without project context.
                 </p>
                 <div className="settings-theme-switch" role="group" aria-label="Coding mode">
                   <button
@@ -2297,6 +2428,7 @@ function App() {
           </div>
         </footer>
         </div>
+        )}
       </div>
     </div>
   )
