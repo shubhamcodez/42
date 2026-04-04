@@ -13,12 +13,19 @@ _STEP_BUCKET = 80
 
 
 async def _supervisor_node(state: RouterState) -> RouterState:
-    from .supervisor import supervisor_decision
+    from .supervisor import compute_supervisor_decision
 
     message = (state.get("message") or "").strip()
     api_key = state["api_key"]
     provider = state.get("provider") or "openai"
-    decision = await asyncio.to_thread(supervisor_decision, api_key, provider, message)
+    decision = await asyncio.to_thread(
+        compute_supervisor_decision,
+        api_key,
+        provider,
+        message,
+        coding_mode=bool(state.get("coding_mode")),
+        coding_project_context=(state.get("coding_project_context") or ""),
+    )
     agents = decision.get("agents") or []
     goal = (
         (agents[0].get("goal") if agents else None)
@@ -201,7 +208,12 @@ async def _run_agent_plan_node(state: RouterState) -> RouterState:
                 tu = None
             elif agent == "coding":
                 reply, tu = await asyncio.to_thread(
-                    run_coding_agent, goal_run, wrapped, api_key, provider
+                    run_coding_agent,
+                    goal_run,
+                    wrapped,
+                    api_key,
+                    provider,
+                    project_context=state.get("coding_project_context") or None,
                 )
             elif agent == "shell":
                 reply, tu = await asyncio.to_thread(

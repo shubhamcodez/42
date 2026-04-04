@@ -2,6 +2,12 @@
 from .desktop_agent import run_desktop_agent
 from .finance_agent import run_finance_agent
 from .router import create_router_graph
-from .supervisor import supervisor_decision
+from .supervisor import compute_supervisor_decision, supervisor_decision
 
-__all__ = ["run_desktop_agent", "run_finance_agent", "create_router_graph", "supervisor_decision"]
+__all__ = [
+    "run_desktop_agent",
+    "run_finance_agent",
+    "create_router_graph",
+    "supervisor_decision",
+    "compute_supervisor_decision",
+]

@@ -20,4 +20,6 @@ class RouterState(TypedDict, total=False):
     on_step: Optional[object]  # optional callback for agent step streaming
     tool_used: Optional[dict]  # when chat used a tool: {"name", "input", "result"}
     web_search_query: Optional[str]  # optional query from UI (+ globe); also parsed from message in tools
-    google_session_id: Optional[str]  # jarvis_google_sid cookie for Calendar/Gmail agent
+    google_session_id: Optional[str]  # ada_google_sid (legacy jarvis_google_sid) for Calendar/Gmail agent
+    coding_mode: bool  # UI: force coding agent + optional project folder snapshot
+    coding_project_context: str  # bounded text from tools.project_repository

@@ -127,7 +127,7 @@ def _try_single_turn_reply(provider: str, user_message: str) -> Optional[str]:
         return f"[Could not run {provider}: {e}]"
 
 
-ASSESSOR_SYSTEM = """You are a senior reviewer for an AI assistant product (JARVIS).
+ASSESSOR_SYSTEM = """You are a senior reviewer for an AI assistant product (Ada).
 
 The user said they are unhappy with the most recent assistant reply before their complaint.
 

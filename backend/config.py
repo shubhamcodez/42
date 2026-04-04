@@ -1,4 +1,4 @@
-"""Load env (secrets), paths, and jarvis-config.yaml (provider + app settings)."""
+"""Load env (secrets), paths, and ada-config.yaml (provider + app settings)."""
 from __future__ import annotations
 
 import copy
@@ -14,10 +14,13 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _BACKEND_ROOT = Path(__file__).resolve().parent
 load_dotenv(_REPO_ROOT / ".env")
 
-CONFIG_YAML = _BACKEND_ROOT / "jarvis-config.yaml"
+CONFIG_YAML = _BACKEND_ROOT / "ada-config.yaml"
+_LEGACY_CONFIG_YAML = _BACKEND_ROOT / "jarvis-config.yaml"
 
-# Legacy paths at repo root (used only if jarvis-config.yaml is missing)
+# Legacy paths at repo root (used only if no yaml)
+_LLM_PROVIDER_FILE = _REPO_ROOT / "ada-llm-provider.txt"
 _LEGACY_LLM_PROVIDER_FILE = _REPO_ROOT / "jarvis-llm-provider.txt"
+_GREP_ROOT_FILE = _REPO_ROOT / "ada-grep-root.txt"
 _LEGACY_GREP_ROOT_FILE = _REPO_ROOT / "jarvis-grep-root.txt"
 
 
@@ -43,19 +46,30 @@ def _deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _yaml_to_load() -> Path | None:
+    if CONFIG_YAML.exists():
+        return CONFIG_YAML
+    if _LEGACY_CONFIG_YAML.exists():
+        return _LEGACY_CONFIG_YAML
+    return None
+
+
 def _load_raw_user_config() -> dict[str, Any]:
     """YAML file if present; otherwise legacy .txt files at repo root."""
-    if CONFIG_YAML.exists():
-        with CONFIG_YAML.open(encoding="utf-8") as f:
+    yml = _yaml_to_load()
+    if yml is not None:
+        with yml.open(encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
 
     legacy: dict[str, Any] = {}
-    if _LEGACY_LLM_PROVIDER_FILE.exists():
-        p = _LEGACY_LLM_PROVIDER_FILE.read_text(encoding="utf-8").strip().lower()
+    llm_txt = _LLM_PROVIDER_FILE if _LLM_PROVIDER_FILE.exists() else _LEGACY_LLM_PROVIDER_FILE
+    if llm_txt.exists():
+        p = llm_txt.read_text(encoding="utf-8").strip().lower()
         if p in ("openai", "xai"):
             legacy["llm_provider"] = p
-    if _LEGACY_GREP_ROOT_FILE.exists():
-        s = _LEGACY_GREP_ROOT_FILE.read_text(encoding="utf-8").strip()
+    grep_txt = _GREP_ROOT_FILE if _GREP_ROOT_FILE.exists() else _LEGACY_GREP_ROOT_FILE
+    if grep_txt.exists():
+        s = grep_txt.read_text(encoding="utf-8").strip()
         if s:
             legacy.setdefault("grep", {})["default_root"] = s
     return legacy
@@ -66,20 +80,21 @@ def _merged_config() -> dict[str, Any]:
 
 
 def get_llm_provider() -> str:
-    """Current LLM provider: 'openai' or 'xai'. From jarvis-config.yaml (or legacy txt if no yaml)."""
+    """Current LLM provider: 'openai' or 'xai'. From ada-config.yaml (or legacy files if missing)."""
     prov = str(_merged_config().get("llm_provider") or "openai").strip().lower()
     return prov if prov in ("openai", "xai") else "openai"
 
 
 def set_llm_provider(provider: str) -> None:
-    """Set LLM provider to 'openai' or 'xai'; writes jarvis-config.yaml."""
+    """Set LLM provider to 'openai' or 'xai'; writes ada-config.yaml."""
     p = (provider or "").strip().lower()
     if p not in ("openai", "xai"):
         raise ValueError("provider must be 'openai' or 'xai'")
     CONFIG_YAML.parent.mkdir(parents=True, exist_ok=True)
     raw: dict[str, Any] = {}
-    if CONFIG_YAML.exists():
-        with CONFIG_YAML.open(encoding="utf-8") as f:
+    yml = _yaml_to_load()
+    if yml is not None:
+        with yml.open(encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
     raw["llm_provider"] = p
     merged = _deep_merge(copy.deepcopy(_DEFAULTS), raw)
@@ -118,25 +133,25 @@ def get_llm_api_key() -> str:
 
 def chats_config_path() -> Path:
     """Path to file storing custom chats directory."""
-    return _REPO_ROOT / "jarvis-chats-dir.txt"
+    return _REPO_ROOT / "ada-chats-dir.txt"
 
 
 def chats_dir() -> Path:
     """Directory where chat logs are stored."""
-    p = chats_config_path()
-    if p.exists():
-        s = p.read_text(encoding="utf-8").strip()
-        if s:
-            d = Path(s)
-            if d.is_dir() or not d.exists():
-                return d
+    for p in (chats_config_path(), _REPO_ROOT / "jarvis-chats-dir.txt"):
+        if p.exists():
+            s = p.read_text(encoding="utf-8").strip()
+            if s:
+                d = Path(s)
+                if d.is_dir() or not d.exists():
+                    return d
     return _REPO_ROOT / "chats"
 
 
 def get_grep_root() -> Path | None:
     """
-    Optional default search root for file grep: jarvis-config.yaml grep.default_root,
-    or legacy jarvis-grep-root.txt if yaml is missing.
+    Optional default search root for file grep: ada-config.yaml grep.default_root,
+    or ada-grep-root.txt / legacy jarvis-grep-root.txt if yaml is missing.
     """
     raw = (_merged_config().get("grep") or {}).get("default_root")
     if raw is None:

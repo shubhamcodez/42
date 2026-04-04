@@ -1,4 +1,4 @@
-# 42 is the answer to everything (Formerly JARVIS)
+# Ada
 
 Assistant that can chat, control the **desktop** (screenshot + vision + pyautogui—including your on-screen browser), run **sandboxed Python**, optional **host shell** (opt-in), and **market data / analysis** via **yfinance** (finance agent). Routes via a supervisor LLM; supports OpenAI and xAI (Grok).
 
@@ -8,8 +8,8 @@ Assistant that can chat, control the **desktop** (screenshot + vision + pyautogu
 
 The agent improves over time by **looping through evals** and turning results into **prompt and code changes**:
 
-1. **Trace every run** — Each chat and agent run is logged (provider, route, success, tokens, errors) to `jarvis-observability/traces/`.
-2. **Generate evals from logs** — An LLM turns recent traces into multi-turn evaluation cases (coherence, task completion). Stored in `jarvis-observability/evals/`.
+1. **Trace every run** — Each chat and agent run is logged (provider, route, success, tokens, errors) to `ada-observability/traces/` (existing `jarvis-observability/` is still used if present and `ada-observability/` does not exist yet).
+2. **Generate evals from logs** — An LLM turns recent traces into multi-turn evaluation cases (coherence, task completion). Stored in `ada-observability/evals/`.
 3. **Run evals for all models** — Each case is run with both OpenAI and xAI; optional LLM judge scores replies. Pass@1 per model is recorded.
 4. **Optimization step** — Aggregates trace stats + eval pass rates, then asks an LLM for:
    - **Prompt modification instructions**: what to add or change in the supervisor, desktop, coding, shell, finance, or chat prompts (with reasons).
@@ -34,7 +34,7 @@ Required backend environment variables:
 - `GOOGLE_OAUTH_CLIENT_ID` - Google OAuth Web client id
 - `GOOGLE_OAUTH_CLIENT_SECRET` - Google OAuth Web client secret
 
-Put `.env` at the **repo root** (same folder as `backend/`), e.g. `E:\Socrates\.env`. The backend loads that file automatically. To use a different path, set `JARVIS_DOTENV_PATH` to the full path of your env file.
+Put `.env` at the **repo root** (same folder as `backend/`), e.g. `E:\Socrates\.env`. The backend loads that file automatically. To use a different path, set `ADA_DOTENV_PATH` to the full path of your env file (legacy: `JARVIS_DOTENV_PATH`).
 
 Example `.env` entries (names must match exactly):
 
@@ -64,7 +64,7 @@ Google Cloud setup notes:
 
 ### Google Workspace agent (supervisor)
 
-After you **Sign in with Google** in Settings, the **supervisor** can route messages to the **`google`** specialist: it plans Calendar/Gmail API operations (same class of actions as typical Calendar/Gmail MCP tools), runs them with your OAuth token, and summarizes results. Example prompts: “What’s on my calendar this week?”, “List unread Gmail”, “Send an email to …”. Uses the `jarvis_google_sid` cookie from the browser (`fetch` with credentials).
+After you **Sign in with Google** in Settings, the **supervisor** can route messages to the **`google`** specialist: it plans Calendar/Gmail API operations (same class of actions as typical Calendar/Gmail MCP tools), runs them with your OAuth token, and summarizes results. Example prompts: “What’s on my calendar this week?”, “List unread Gmail”, “Send an email to …”. Uses the `ada_google_sid` cookie from the browser (`fetch` with credentials); legacy `jarvis_google_sid` is still accepted until you sign in again.
 
 If you change OAuth scopes, **Disconnect** and sign in again.
 6. For external users, publish the OAuth consent screen and add **Test users** while the app is in Testing.

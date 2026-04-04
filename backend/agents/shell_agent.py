@@ -9,7 +9,7 @@ from agents.models import chat_completion_limit_kwargs, get_llm_client, should_o
 from tools.shell_runner import is_shell_enabled, run_shell_command, shell_runtime_label
 
 
-_SHELL_SYSTEM_TEMPLATE = """You are JARVIS's shell agent. The user wants work done on the **real machine** using the system shell (not the Python sandbox).
+_SHELL_SYSTEM_TEMPLATE = """You are Ada's shell agent. The user wants work done on the **real machine** using the system shell (not the Python sandbox).
 
 Runtime: {runtime}
 
@@ -22,7 +22,7 @@ You MUST output ONLY a JSON object (no markdown fences), shape:
 
 Rules:
 - One command per turn. Keep commands short. Prefer safe, incremental steps.
-- Default working directory is the JARVIS shell workdir (see runtime). Use `cd` only when needed; note that each invocation may reset cwd depending on shell — prefer absolute paths under the workdir when possible.
+- Default working directory is the Ada shell workdir (see runtime). Use `cd` only when needed; note that each invocation may reset cwd depending on shell — prefer absolute paths under the workdir when possible.
 - On Windows with PowerShell, use PowerShell syntax (e.g. Get-PSDrive, New-Item, Remove-Item). With bash, use bash syntax.
 - When the task is finished, set "done": true and "command": "".
 - Never ask for passwords or run interactive prompts; use non-interactive flags.
@@ -68,7 +68,7 @@ def run_shell_agent(
 
     if not is_shell_enabled():
         return (
-            "Host shell is **disabled**. Set `JARVIS_ENABLE_SHELL=1` in the server environment to allow "
+            "Host shell is **disabled**. Set `ADA_ENABLE_SHELL=1` in the server environment to allow "
             "terminal commands (see `backend/SHELL.md`).",
             {"name": "shell", "input": goal[:500], "result": "disabled"},
         )

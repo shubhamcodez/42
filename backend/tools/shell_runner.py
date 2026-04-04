@@ -1,9 +1,9 @@
 """
 Host shell execution for the shell agent (OPT-IN — dangerous).
 
-Set JARVIS_ENABLE_SHELL=1 to allow. Commands run under a configurable working directory
-(default: <repo>/jarvis-shell-work). On Windows, uses Git Bash if `bash` is on PATH,
-otherwise PowerShell. Override with JARVIS_SHELL=bash|powershell|sh.
+Set ADA_ENABLE_SHELL=1 to allow (JARVIS_ENABLE_SHELL still honored). Commands run under a
+configurable working directory (default: <repo>/ada-shell-work). On Windows, uses Git Bash if `bash` is on PATH,
+otherwise PowerShell. Override with ADA_SHELL=bash|powershell|sh.
 
 This is NOT a security boundary. Anyone who can reach the API can wipe data if enabled.
 """
@@ -17,8 +17,16 @@ import sys
 from pathlib import Path
 
 
+def _getenv(*keys: str) -> str:
+    for k in keys:
+        v = os.environ.get(k)
+        if v is not None and str(v).strip() != "":
+            return str(v)
+    return ""
+
+
 def is_shell_enabled() -> bool:
-    v = (os.environ.get("JARVIS_ENABLE_SHELL") or "").strip().lower()
+    v = _getenv("ADA_ENABLE_SHELL", "JARVIS_ENABLE_SHELL").strip().lower()
     return v in ("1", "true", "yes", "on")
 
 
@@ -29,11 +37,14 @@ def _repo_root() -> Path:
 
 
 def get_shell_workdir() -> Path:
-    raw = (os.environ.get("JARVIS_SHELL_WORKDIR") or "").strip()
+    raw = _getenv("ADA_SHELL_WORKDIR", "JARVIS_SHELL_WORKDIR").strip()
     if raw:
         p = Path(raw).expanduser()
     else:
-        p = _repo_root() / "jarvis-shell-work"
+        root = _repo_root()
+        ada_p = root / "ada-shell-work"
+        leg_p = root / "jarvis-shell-work"
+        p = ada_p if ada_p.exists() or not leg_p.exists() else leg_p
     return p.resolve()
 
 
@@ -52,7 +63,7 @@ def shell_runtime_label() -> str:
 
 
 def _resolve_shell_mode() -> str:
-    v = (os.environ.get("JARVIS_SHELL") or "").strip().lower()
+    v = _getenv("ADA_SHELL", "JARVIS_SHELL").strip().lower()
     if v in ("powershell", "pwsh", "bash", "sh"):
         return "powershell" if v == "pwsh" else v
     if sys.platform == "win32":
@@ -115,7 +126,7 @@ def why_command_blocked(command: str) -> str | None:
 
 def run_shell_command(command: str, timeout_sec: float | None = None) -> dict:
     """
-    Run one command in the configured shell under JARVIS_SHELL_WORKDIR.
+    Run one command in the configured shell under ADA_SHELL_WORKDIR.
     Returns dict: ok, returncode, stdout, stderr, error (optional), shell (mode).
     """
     if not is_shell_enabled():
@@ -124,7 +135,7 @@ def run_shell_command(command: str, timeout_sec: float | None = None) -> dict:
             "returncode": -1,
             "stdout": "",
             "stderr": "",
-            "error": "Shell tool disabled. Set JARVIS_ENABLE_SHELL=1 in the environment.",
+            "error": "Shell tool disabled. Set ADA_ENABLE_SHELL=1 in the environment.",
             "shell": None,
         }
 
@@ -141,8 +152,10 @@ def run_shell_command(command: str, timeout_sec: float | None = None) -> dict:
 
     cwd = ensure_shell_workdir()
     mode = _resolve_shell_mode()
-    t = timeout_sec if timeout_sec is not None else float(os.environ.get("JARVIS_SHELL_TIMEOUT", "120"))
-    max_out = int(os.environ.get("JARVIS_SHELL_MAX_OUTPUT", "32000"))
+    t = timeout_sec if timeout_sec is not None else float(
+        _getenv("ADA_SHELL_TIMEOUT", "JARVIS_SHELL_TIMEOUT") or "120"
+    )
+    max_out = int(_getenv("ADA_SHELL_MAX_OUTPUT", "JARVIS_SHELL_MAX_OUTPUT") or "32000")
     env = os.environ.copy()
 
     try:

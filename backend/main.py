@@ -34,6 +34,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
+from tools.project_repository import build_repository_snapshot
+
 from config import (
     get_chat_history_limit,
     get_grep_root,
@@ -43,7 +45,7 @@ from config import (
     set_llm_provider,
 )
 from agents.models import get_llm_client
-from agents.supervisor import supervisor_decision
+from agents.supervisor import compute_supervisor_decision
 from memory import get_memory_store, ingest_chat, run_retrieval_pipeline
 from memory.chat_log import (
     append_chat_log,
@@ -90,7 +92,23 @@ from auth.google_oauth import (
 )
 from integrations.gmail_client import fetch_gmail_profile
 
-app = FastAPI(title="JARVIS API")
+_GOOGLE_SID_COOKIE = "ada_google_sid"
+_LEGACY_GOOGLE_SID_COOKIE = "jarvis_google_sid"
+
+
+def _google_session_cookie(request: Request) -> str | None:
+    sid = request.cookies.get(_GOOGLE_SID_COOKIE) or request.cookies.get(
+        _LEGACY_GOOGLE_SID_COOKIE
+    )
+    return sid if sid else None
+
+
+def _clear_google_sid_cookies(response: JSONResponse | RedirectResponse) -> None:
+    response.delete_cookie(_GOOGLE_SID_COOKIE, path="/")
+    response.delete_cookie(_LEGACY_GOOGLE_SID_COOKIE, path="/")
+
+
+app = FastAPI(title="Ada API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:1430"],
@@ -166,12 +184,23 @@ class SendMessageRequest(BaseModel):
     attachment_paths: Optional[list[str]] = None
     chat_id: Optional[str] = None
     web_search_query: Optional[str] = None
+    coding_mode: bool = False
+    coding_project_path: Optional[str] = None
 
 
 class ChatbotResponseRequest(BaseModel):
     message: str = ""
     attachment_paths: Optional[list[str]] = None
     web_search_query: Optional[str] = None
+
+
+def _prepare_coding_project_context(coding_mode: bool, path: Optional[str]) -> str:
+    if not coding_mode:
+        return ""
+    p = (path or "").strip()
+    if not p:
+        return ""
+    return build_repository_snapshot(p)
 
 
 class AppendChatLogRequest(BaseModel):
@@ -203,7 +232,7 @@ class PythonSandboxRequest(BaseModel):
 
 
 class ShellRunRequest(BaseModel):
-    """Run one host shell command when JARVIS_ENABLE_SHELL=1 (see tools/shell_runner.py)."""
+    """Run one host shell command when ADA_ENABLE_SHELL=1 (see tools/shell_runner.py)."""
 
     command: str
     timeout_sec: float | None = None
@@ -279,6 +308,14 @@ async def send_message(body: SendMessageRequest, request: Request):
     ws_q = (body.web_search_query or "").strip()
     if not message and ws_q:
         message = f"Summarize and answer based on a web search about: {ws_q}"
+    if (
+        not message
+        and body.coding_mode
+        and (body.coding_project_path or "").strip()
+    ):
+        message = (
+            "Give a concise overview of this imported project: structure, main technologies, and entry points."
+        )
     chat_id = body.chat_id
 
     if chat_id and is_feedback_complaint(message):
@@ -333,6 +370,11 @@ async def send_message(body: SendMessageRequest, request: Request):
                 payload.get("screenshot"),
             )
 
+    coding_ctx = await asyncio.to_thread(
+        _prepare_coding_project_context,
+        body.coding_mode,
+        body.coding_project_path,
+    )
     initial_state = {
         "message": message,
         "attachment_paths": attachment_paths,
@@ -341,7 +383,9 @@ async def send_message(body: SendMessageRequest, request: Request):
         "provider": provider,
         "on_step": on_step,
         "web_search_query": ws_q or None,
-        "google_session_id": request.cookies.get("jarvis_google_sid"),
+        "google_session_id": _google_session_cookie(request),
+        "coding_mode": bool(body.coding_mode),
+        "coding_project_context": coding_ctx,
     }
     graph = _get_router_graph()
     drain_task = asyncio.create_task(drain_steps())
@@ -388,7 +432,7 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
     """
     Streaming variant: classify first; if chat, stream SSE chunks; else run agent and send one final SSE event.
     """
-    google_session_id = request.cookies.get("jarvis_google_sid")
+    google_session_id = _google_session_cookie(request)
     provider = get_llm_provider()
     api_key = get_llm_api_key()
     message = (body.message or "").strip()
@@ -396,6 +440,14 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
     ws_q = (body.web_search_query or "").strip()
     if not message and ws_q:
         message = f"Summarize and answer based on a web search about: {ws_q}"
+    if (
+        not message
+        and body.coding_mode
+        and (body.coding_project_path or "").strip()
+    ):
+        message = (
+            "Give a concise overview of this imported project: structure, main technologies, and entry points."
+        )
     chat_id = body.chat_id
     has_attachments = len(attachment_paths) > 0
     client = get_llm_client(provider)
@@ -577,8 +629,20 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
                 yield line
             return
 
+        coding_ctx = await asyncio.to_thread(
+            _prepare_coding_project_context,
+            body.coding_mode,
+            body.coding_project_path,
+        )
         yield _sse_data({"type": "status", "phase": "supervisor", "message": "Running supervisor…"})
-        decision = await asyncio.to_thread(supervisor_decision, api_key, provider, message)
+        decision = await asyncio.to_thread(
+            compute_supervisor_decision,
+            api_key,
+            provider,
+            message,
+            coding_mode=bool(body.coding_mode),
+            coding_project_context=coding_ctx,
+        )
         agents_plan = decision.get("agents") or []
         goal = (decision.get("goal") or message).strip()
         is_task = bool(decision.get("run_agent")) and len(agents_plan) > 0
@@ -678,6 +742,8 @@ async def send_message_stream(body: SendMessageRequest, request: Request):
             "on_step": on_step,
             "web_search_query": ws_q or None,
             "google_session_id": google_session_id,
+            "coding_mode": bool(body.coding_mode),
+            "coding_project_context": coding_ctx,
         }
         graph = _get_router_graph()
         stream_start = time.perf_counter()
@@ -880,7 +946,7 @@ async def api_set_model(body: SetModelRequest):
 # --- Google OAuth (multi-user scaffold) ---
 @app.get("/auth/google/status")
 async def api_google_auth_status(request: Request):
-    sid = request.cookies.get("jarvis_google_sid")
+    sid = _google_session_cookie(request)
     info = google_status_by_session(sid)
     info["redirect_uri"] = oauth_redirect_uri()
     info["client_id_hint"] = oauth_client_id_hint()
@@ -908,7 +974,7 @@ async def api_google_auth_callback(code: str | None = None, state: str | None = 
         redirect_url = callback_success_redirect(next_path)
         resp = RedirectResponse(url=redirect_url)
         resp.set_cookie(
-            "jarvis_google_sid",
+            _GOOGLE_SID_COOKIE,
             sid,
             httponly=True,
             samesite="lax",
@@ -923,26 +989,26 @@ async def api_google_auth_callback(code: str | None = None, state: str | None = 
 
 @app.post("/auth/google/logout")
 async def api_google_auth_logout(request: Request):
-    sid = request.cookies.get("jarvis_google_sid")
+    sid = _google_session_cookie(request)
     logout_session(sid)
     out = JSONResponse({"ok": True})
-    out.delete_cookie("jarvis_google_sid", path="/")
+    _clear_google_sid_cookies(out)
     return out
 
 
 @app.post("/auth/google/disconnect")
 async def api_google_auth_disconnect(request: Request):
-    sid = request.cookies.get("jarvis_google_sid")
+    sid = _google_session_cookie(request)
     disconnect_session(sid)
     out = JSONResponse({"ok": True})
-    out.delete_cookie("jarvis_google_sid", path="/")
+    _clear_google_sid_cookies(out)
     return out
 
 
 @app.get("/integrations/gmail/profile")
 async def api_gmail_profile(request: Request):
     """Gmail API profile for the signed-in Google user (uses OAuth token from sign-in)."""
-    sid = request.cookies.get("jarvis_google_sid")
+    sid = _google_session_cookie(request)
     token, err = get_valid_access_token_for_session(sid)
     if not token:
         return JSONResponse({"ok": False, "error": err or "Unauthorized"}, status_code=401)
@@ -1050,6 +1116,8 @@ async def send_message_with_files(
     message: str = Form(""),
     chat_id: Optional[str] = Form(None),
     web_search_query: Optional[str] = Form(None),
+    coding_mode: bool = Form(False),
+    coding_project_path: Optional[str] = Form(None),
     files: list[UploadFile] = File(default=[]),
 ):
     """Accept multipart form: message + files. Saves files to temp and calls send_message."""
@@ -1071,6 +1139,8 @@ async def send_message_with_files(
             attachment_paths=paths if paths else None,
             chat_id=chat_id,
             web_search_query=(web_search_query or "").strip() or None,
+            coding_mode=bool(coding_mode),
+            coding_project_path=(coding_project_path or "").strip() or None,
         )
         result = await send_message(body, request)
         return result
@@ -1110,7 +1180,7 @@ async def api_tools_grep(
     q: str = Query(..., description="Search pattern (literal by default; set regex=1 for regex)"),
     root: Optional[str] = Query(
         None,
-        description="Directory to search (defaults to JARVIS_GREP_ROOT or jarvis-grep-root.txt)",
+        description="Directory to search (defaults to grep.default_root in ada-config.yaml or ada-grep-root.txt)",
     ),
     limit: int = Query(100, ge=1, le=5000),
     regex: bool = Query(False, description="If true, pattern is a regex (ripgrep / Python re)"),
@@ -1128,7 +1198,7 @@ async def api_tools_grep(
         if gr is None:
             return {
                 "ok": False,
-                "error": "No search root: pass root= or set JARVIS_GREP_ROOT or create jarvis-grep-root.txt with a directory path.",
+                "error": "No search root: pass root= or set grep.default_root in ada-config.yaml or create ada-grep-root.txt with a directory path.",
                 "matches": [],
             }
         base = gr
@@ -1170,10 +1240,10 @@ async def api_tools_python_sandbox(body: PythonSandboxRequest):
 async def api_tools_shell(body: ShellRunRequest):
     """
     Run a single shell command on the host (same backend as the shell agent).
-    Requires JARVIS_ENABLE_SHELL=1. Dangerous — do not expose publicly.
+    Requires ADA_ENABLE_SHELL=1. Dangerous — do not expose publicly.
     """
     if not is_shell_enabled():
-        return {"ok": False, "error": "Shell disabled (set JARVIS_ENABLE_SHELL=1)."}
+        return {"ok": False, "error": "Shell disabled (set ADA_ENABLE_SHELL=1)."}
     result = await asyncio.to_thread(run_shell_command, body.command, body.timeout_sec)
     return result
 

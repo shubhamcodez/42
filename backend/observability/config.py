@@ -3,7 +3,14 @@ from pathlib import Path
 
 # Project root (parent of backend)
 _ROOT = Path(__file__).resolve().parent.parent.parent
-OBS_DIR = _ROOT / "jarvis-observability"
+_ADA_OBS = _ROOT / "ada-observability"
+_JARVIS_OBS = _ROOT / "jarvis-observability"
+if _ADA_OBS.exists():
+    OBS_DIR = _ADA_OBS
+elif _JARVIS_OBS.exists():
+    OBS_DIR = _JARVIS_OBS
+else:
+    OBS_DIR = _ADA_OBS
 TRACES_DIR = OBS_DIR / "traces"
 EVALS_DIR = OBS_DIR / "evals"
 OPT_DIR = OBS_DIR / "optimization"

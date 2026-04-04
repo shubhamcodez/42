@@ -19,9 +19,11 @@ dist/
 # Chat conversation logs
 chats/
 venv/
+ada-observability/
 jarvis-observability/
 
 # Shell agent default workdir (host commands)
+ada-shell-work/
 jarvis-shell-work/
 
 # Logs and caches

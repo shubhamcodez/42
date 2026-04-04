@@ -17,11 +17,11 @@ from .eval_runner import pass_at_k
 
 STATS_FILE = "optimization_stats.json"
 
-OPTIMIZER_SYSTEM = """You are an optimization analyst for a JARVIS-style agent system with:
+OPTIMIZER_SYSTEM = """You are an optimization analyst for an Ada-style agent system with:
 - A supervisor (LLM decides: chat vs desktop vs coding vs shell vs finance agent)
 - Desktop agent (screenshot + vision LLM → mouse + keyboard: click/double/right-click, type, press keys, hotkeys, scroll via pyautogui)
 - Coding agent (LLM writes Python → sandbox: stdlib + numpy/pandas/matplotlib/yfinance; no GUI)
-- Shell agent (LLM proposes host terminal commands; opt-in via JARVIS_ENABLE_SHELL)
+- Shell agent (LLM proposes host terminal commands; opt-in via ADA_ENABLE_SHELL)
 - Finance agent (planner LLM → yfinance fetch → analyst LLM; stocks/ETFs/crypto tickers)
 - Chat (plain LLM reply)
 

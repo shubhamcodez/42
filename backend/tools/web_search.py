@@ -29,11 +29,12 @@ def try_extract_web_search_query(message: str) -> Optional[str]:
 
 
 def _effective_max_results(requested: int) -> int:
-    """Clamp to a sensible band (default ~10, cap 12). Override with JARVIS_WEB_SEARCH_MAX_RESULTS."""
+    """Clamp to a sensible band (default ~10, cap 12). Override with ADA_WEB_SEARCH_MAX_RESULTS."""
     import os
 
     try:
-        env_n = int((os.environ.get("JARVIS_WEB_SEARCH_MAX_RESULTS") or "").strip() or str(_DEFAULT_RESULTS))
+        raw = (os.environ.get("ADA_WEB_SEARCH_MAX_RESULTS") or os.environ.get("JARVIS_WEB_SEARCH_MAX_RESULTS") or "").strip()
+        env_n = int(raw or str(_DEFAULT_RESULTS))
     except ValueError:
         env_n = _DEFAULT_RESULTS
     env_n = max(5, min(env_n, _MAX_RESULTS_CAP))

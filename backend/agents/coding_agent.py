@@ -9,16 +9,20 @@ from agents.models import chat_completion_limit_kwargs, get_llm_client, should_o
 from tools.python_sandbox import extract_python_fences, run_sandboxed_python
 from tools.sandbox_markdown import redact_sandbox_result_dict, redact_image_stdout, stdout_to_markdown_body
 
-_CODING_GEN_SYSTEM = """You are JARVIS's coding agent. The user gave a task that should be solved with Python code running in a secure sandbox—not by clicking the desktop.
+_MAX_PROJECT_CONTEXT_CHARS = 20_000
+
+_CODING_GEN_SYSTEM = """You are Ada's coding agent. The user gave a task that should be solved with Python code running in a secure sandbox—not by clicking the desktop.
 
 **Role vs finance agent:** The finance agent fetches market **data** and short factual/market commentary. **You** run **code**: statistics, transforms, simulations, and **plots**. If they want charts, regressions, correlations, backtests, or custom analysis on prices/returns, do it here with numpy/pandas/matplotlib/yfinance as needed.
+
+If a **project repository snapshot** is included, use it to answer questions about that codebase or to mirror its patterns in your script. You still cannot open files on disk—only use what appears in the snapshot.
 
 Output ONLY a JSON object, no markdown fences, with exactly one key:
   "code": "<python source>"
 
 Rules for the code:
 - Allowed imports (stdlib + sandbox): math, json, itertools, functools, collections, statistics, datetime, decimal, fractions, string, random, re, operator, copy, io, base64, csv, hashlib, typing, warnings, plus **numpy**, **pandas**, **matplotlib**, **yfinance** and their usual dependencies (already whitelisted).
-- **Matplotlib:** call `import matplotlib; matplotlib.use("Agg")` before `pyplot`. To show a chart in the chat UI, save PNG to bytes and print **exactly one line**: `JARVIS_IMAGE_PNG:` + base64 (no newlines inside), e.g. `print("JARVIS_IMAGE_PNG:" + base64.b64encode(buf.getvalue()).decode())`. You may print other text before/after on separate lines; those appear as monospace. Raw single-line PNG base64 (starts with `iVBOR`) is also detected.
+- **Matplotlib:** call `import matplotlib; matplotlib.use("Agg")` before `pyplot`. To show a chart in the chat UI, save PNG to bytes and print **exactly one line**: `ADA_IMAGE_PNG:` + base64 (no newlines inside), e.g. `print("ADA_IMAGE_PNG:" + base64.b64encode(buf.getvalue()).decode())`. You may print other text before/after on separate lines; those appear as monospace. Raw single-line PNG base64 (starts with `iVBOR`) is also detected.
 - **yfinance:** OK for pulling `Ticker(...).history(...)` or `fast_info` inside your analysis script when the task needs live series.
 - No `open()`, no `os`/`sys`/`subprocess`, no `input()`. Print answers with `print()`.
 - Keep code focused; prefer small readable steps.
@@ -50,6 +54,8 @@ def run_coding_agent(
     on_step: Optional[Callable] = None,
     api_key: Optional[str] = None,
     provider: str = "openai",
+    *,
+    project_context: Optional[str] = None,
 ) -> tuple[str, dict]:
     """
     Plan (short) → generate Python → sandbox → optional one retry → formatted reply.
@@ -77,7 +83,13 @@ def run_coding_agent(
     if on_step:
         on_step(0, plan, "plan", plan, None, False, screenshot_base64=None)
 
-    user_msg = f"Task:\n{goal}\n\nOutput ONLY JSON: {{\"code\": \"...\"}}"
+    ctx = (project_context or "").strip()
+    if len(ctx) > _MAX_PROJECT_CONTEXT_CHARS:
+        ctx = ctx[: _MAX_PROJECT_CONTEXT_CHARS].rstrip() + "\n\n…"
+    user_msg = f"Task:\n{goal}\n\n"
+    if ctx:
+        user_msg += f"Project repository snapshot (read-only; your code cannot open these paths):\n{ctx}\n\n"
+    user_msg += 'Output ONLY JSON: {"code": "..."}'
 
     def call_llm(follow_ups: Optional[list[dict]] = None) -> str:
         messages: list[dict] = [

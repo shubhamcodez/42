@@ -1,4 +1,4 @@
-# JARVIS Agent Workflow
+# Ada Agent Workflow
 
 End-to-end flow from user message to reply: routing, supervisor, desktop/coding/shell/**finance** agents, **memory** (planned), and **self-improving evals**.
 
@@ -10,7 +10,7 @@ End-to-end flow from user message to reply: routing, supervisor, desktop/coding/
 - **POST `/chat/send-message/stream`** (streaming): SSE stream; used by the frontend. Can stream chat tokens **or** run the agent and send one final event with the full reply.
 - **POST `/chat/response`**: chat-only, no routing (direct LLM reply).
 
-The **provider** (OpenAI or xAI) and **API key** come from `get_llm_provider()` and `get_llm_api_key()` (Settings updates `backend/jarvis-config.yaml`; keys stay in `.env`).
+The **provider** (OpenAI or xAI) and **API key** come from `get_llm_provider()` and `get_llm_api_key()` (Settings updates `backend/ada-config.yaml`; keys stay in `.env`).
 
 ---
 
@@ -75,7 +75,7 @@ So for the user: either they see **streaming chat text** or **agent steps (and s
    - **Reply** is markdown sections (`### Desktop`, `### Coding`, …) concatenated.  
    - **route:** `run_multi_agent` if more than one section ran, else `run_desktop` / `run_coding` / `run_shell` / `run_finance` matching the single specialist.  
    - **tool_used:** last meaningful tool payload (e.g. sandbox, yfinance, web_search).  
-   - **Shell** remains opt-in (`JARVIS_ENABLE_SHELL=1`). See **FINANCE.md** / **SHELL.md** for agent details.
+   - **Shell** remains opt-in (`ADA_ENABLE_SHELL=1`). See **FINANCE.md** / **SHELL.md** for agent details.
 
 So the **entire agent workflow** for a given message is: **Start → Supervisor → chat OR run_agent_plan → END**. The supervisor may schedule **one or several** specialists in sequence on a single user turn. There is **no** embedded Playwright browser agent; on-screen browser work uses **desktop** (real Chrome) or **chat** (links and instructions).
 
@@ -117,7 +117,7 @@ Again, **on_step** is the same callback; the backend sends these steps over the 
   1. Emit **on_step(0, …)** with a short plan (interpret task → generate code → run in sandbox).  
   2. **LLM** outputs JSON `{"code": "..."}` using sandbox-allowed imports (stdlib + **numpy, pandas, matplotlib, yfinance**, etc.; see `backend/SANDBOX.md`). **`MPLBACKEND=Agg`** is set for headless matplotlib.  
   3. **run_sandboxed_python** in a child process (~**45s** timeout for slow network); on failure, one **retry** with the error returned to the LLM.  
-  4. Further **on_step** calls for execute/done; final reply includes stdout (text in fenced blocks; **PNG/JPEG lines** or `JARVIS_IMAGE_PNG:…` become inline Markdown images in the UI). **tool_used** may record `python_sandbox`.  
+  4. Further **on_step** calls for execute/done; final reply includes stdout (text in fenced blocks; **PNG/JPEG lines** or `ADA_IMAGE_PNG:…` (legacy `JARVIS_IMAGE_PNG`) become inline Markdown images in the UI). **tool_used** may record `python_sandbox`.  
 - **No GUI** — does not use pyautogui or desktop automation for script tasks. For **market data + prose** without custom code, use the **finance** agent instead.
 
 ---
@@ -125,8 +125,8 @@ Again, **on_step** is the same callback; the backend sends these steps over the 
 ## 6c. Shell agent (host terminal, opt-in)
 
 - **Input:** goal (e.g. “mkdir foo”, “list drives”, “run `git status`”), `on_step`, api_key, provider.  
-- **Enable:** `JARVIS_ENABLE_SHELL=1` on the server (see `backend/SHELL.md`).  
-- **Flow:** Multi-turn loop: LLM outputs JSON `{"done", "command", "thought}` → **run_shell_command** (PowerShell or bash under `JARVIS_SHELL_WORKDIR`) → stdout/stderr returned to the LLM until `done` or step limit.  
+- **Enable:** `ADA_ENABLE_SHELL=1` on the server (see `backend/SHELL.md`).  
+- **Flow:** Multi-turn loop: LLM outputs JSON `{"done", "command", "thought}` → **run_shell_command** (PowerShell or bash under `ADA_SHELL_WORKDIR`) → stdout/stderr returned to the LLM until `done` or step limit.  
 - **Not a security boundary** — same risk class as SSH on that machine; blocklist only catches a few catastrophic patterns.
 
 ---
@@ -161,7 +161,7 @@ Again, **on_step** is the same callback; the backend sends these steps over the 
 
 - After the graph finishes (both stream and non-stream), the backend calls **trace_log(provider, route, message, reply, success, error, duration_sec, …)**.  
 - **route** is the state’s **route** set by the node that ran (chat, run_desktop, run_coding, run_shell, run_finance), or **feedback_assess** when the user sends a short “this reply was bad” message (see §9).  
-- Traces are appended to **jarvis-observability/traces/trace.jsonl** and used later for optional eval generation and optimization (per-model success rates, tokens, errors).
+- Traces are appended to **ada-observability/traces/trace.jsonl** (or legacy **jarvis-observability** if that folder exists alone) and used later for optional eval generation and optimization (per-model success rates, tokens, errors).
 
 ---
 
@@ -172,7 +172,7 @@ Again, **on_step** is the same callback; the backend sends these steps over the 
 **Batch evals from traces (optional)** — The agent can also improve using **traces** and **batch eval results**:
 
 1. **Trace** — Every chat/agent run is logged (see §8).  
-2. **Generate evals** — POST `/observability/evals/generate`: an LLM turns recent traces into multi-turn eval cases; stored in `jarvis-observability/evals/eval_cases.jsonl`. Background generation from traces is **off by default**; set `JARVIS_AUTO_EVAL_GEN=1` to re-enable on a cooldown.  
+2. **Generate evals** — POST `/observability/evals/generate`: an LLM turns recent traces into multi-turn eval cases; stored in `ada-observability/evals/eval_cases.jsonl` (same legacy-folder rule as traces). Background generation from traces is **off by default**; set `ADA_AUTO_EVAL_GEN=1` to re-enable on a cooldown.  
 3. **Run evals** — POST `/observability/evals/run`: each case is run with **both** OpenAI and xAI; optional LLM judge scores replies; results in `eval_runs.jsonl`, pass@1 per model.  
 4. **Optimization** — POST `/observability/optimization/run`: aggregates trace stats + eval pass rates, then calls an LLM to produce:
    - **prompt_modification_instructions** (target: supervisor | desktop | coding | shell | finance | chat; what to add/change and why),

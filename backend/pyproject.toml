@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "jarvis-backend"
+name = "ada-backend"
 version = "0.1.0"
-description = "JARVIS FastAPI backend: OpenAI chat, task classification, desktop agent"
+description = "Ada FastAPI backend: OpenAI chat, task classification, desktop agent"
 authors = []
 readme = "README.md"
 packages = [{ include = "*", from = "." }]

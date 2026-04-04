@@ -38,7 +38,7 @@ function redactImagePayloadsInText(text) {
     .split('\n')
     .map((line) => {
       const t = line.trim()
-      if (/^JARVIS_IMAGE_(PNG|JPE?G|GIF|WEBP):/i.test(t)) return '[chart image hidden]'
+      if (/^(?:ADA|JARVIS)_IMAGE_(PNG|JPE?G|GIF|WEBP):/i.test(t)) return '[chart image hidden]'
       if (t.length > 200 && /^[A-Za-z0-9+/=]+$/.test(t) && t.startsWith('iVBOR')) return '[chart image hidden]'
       if (t.length > 200 && /^[A-Za-z0-9+/=]+$/.test(t) && t.startsWith('/9j')) return '[chart image hidden]'
       return line
@@ -165,6 +165,20 @@ const GLOBE_MENU_ICON = (
   </svg>
 )
 
+/** Sidebar / footer folder mark (stroke, matches other UI icons). */
+const REPO_FOLDER_ICON = (
+  <svg className="repo-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M3 7.5V19a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-7l-2-2H5a2 2 0 00-2 2v.5" />
+  </svg>
+)
+
+function workspaceBasename(path) {
+  const p = (path || '').trim().replace(/[/\\]+$/, '')
+  if (!p) return ''
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+  return i >= 0 ? p.slice(i + 1) : p
+}
+
 function CopyResponseButton({ text }) {
   const [copied, setCopied] = useState(false)
   const plain = typeof text === 'string' ? text : String(text ?? '')
@@ -237,11 +251,26 @@ function App() {
   const [addMenuOpen, setAddMenuOpen] = useState(false)
   const [webSearchMode, setWebSearchMode] = useState(() => {
     try {
-      return sessionStorage.getItem('jarvis-web-search-mode') === '1'
+      return sessionStorage.getItem('ada-web-search-mode') === '1'
     } catch {
       return false
     }
   })
+  /** Absolute path on the API host — same idea as VS Code “Open Folder…”. */
+  const [workspaceFolder, setWorkspaceFolder] = useState(() => {
+    try {
+      return (
+        localStorage.getItem('ada-workspace-folder') ||
+        sessionStorage.getItem('ada-workspace-folder') ||
+        sessionStorage.getItem('ada-coding-project-path') ||
+        ''
+      )
+    } catch {
+      return ''
+    }
+  })
+  const [workspaceFolderPickerOpen, setWorkspaceFolderPickerOpen] = useState(false)
+  const [workspaceFolderDraft, setWorkspaceFolderDraft] = useState('')
 
   const refreshChatList = useCallback(async () => {
     try {
@@ -441,8 +470,8 @@ function App() {
     setWebSearchMode((m) => {
       const next = !m
       try {
-        if (next) sessionStorage.setItem('jarvis-web-search-mode', '1')
-        else sessionStorage.removeItem('jarvis-web-search-mode')
+        if (next) sessionStorage.setItem('ada-web-search-mode', '1')
+        else sessionStorage.removeItem('ada-web-search-mode')
       } catch {
         /* ignore */
       }
@@ -451,13 +480,53 @@ function App() {
     setAddMenuOpen(false)
   }
 
+  const persistWorkspaceFolder = (value) => {
+    const next = (value || '').trim()
+    setWorkspaceFolder(next)
+    try {
+      if (next) {
+        localStorage.setItem('ada-workspace-folder', next)
+        sessionStorage.setItem('ada-workspace-folder', next)
+        sessionStorage.removeItem('ada-coding-project-path')
+        sessionStorage.removeItem('ada-coding-project-mode')
+      } else {
+        localStorage.removeItem('ada-workspace-folder')
+        sessionStorage.removeItem('ada-workspace-folder')
+        sessionStorage.removeItem('ada-coding-project-path')
+        sessionStorage.removeItem('ada-coding-project-mode')
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const openWorkspaceFolderPicker = () => {
+    setWorkspaceFolderDraft(workspaceFolder)
+    setWorkspaceFolderPickerOpen(true)
+  }
+
+  const confirmWorkspaceFolder = () => {
+    persistWorkspaceFolder(workspaceFolderDraft)
+    setWorkspaceFolderPickerOpen(false)
+  }
+
+  const closeWorkspaceFolder = () => {
+    persistWorkspaceFolder('')
+    setWorkspaceFolderPickerOpen(false)
+    setWorkspaceFolderDraft('')
+  }
+
   const handleSend = async (opts = {}) => {
     const raw = input.trim()
     const explicitWs = (opts.webSearchQuery || '').trim()
     const extraWs =
       explicitWs || (webSearchMode && raw ? raw : '')
     const filesToSend = [...attachments]
-    if (!raw && filesToSend.length === 0 && !extraWs) return
+    const pathForCoding = workspaceFolder.trim()
+    const workspaceContextActive = pathForCoding.length > 0
+    if (!raw && filesToSend.length === 0 && !extraWs && !workspaceContextActive) {
+      return
+    }
     setInput('')
     setAttachments([])
 
@@ -466,6 +535,13 @@ function App() {
     else if (filesToSend.length > 1 && !displayText) displayText = filesToSend.map((f) => f.name).join(', ')
     if (explicitWs && !webSearchMode) {
       displayText = displayText ? `${displayText} · Web: ${explicitWs}` : `Web search: ${explicitWs}`
+    }
+    const cPath = pathForCoding
+    if (workspaceContextActive && cPath) {
+      const label = workspaceBasename(cPath) || cPath
+      displayText = displayText
+        ? `${displayText} · Project: ${label}`
+        : `Project: ${label}`
     }
     appendMessage(displayText, true)
     setSending(true)
@@ -489,7 +565,9 @@ function App() {
           raw || 'Please summarize or answer based on the attached documents.',
           filesToSend,
           chatId,
-          extraWs.trim() || null
+          extraWs.trim() || null,
+          workspaceContextActive,
+          cPath || null,
         )
         appendMessage(reply, false)
         await appendChatLog('assistant', reply)
@@ -524,9 +602,17 @@ function App() {
           }
         }
 
-        const streamMsg = raw || (extraWs ? '' : 'Please summarize or answer based on the attached documents.')
+        const streamMsg =
+          raw ||
+          (extraWs
+            ? ''
+            : workspaceContextActive && cPath
+              ? ''
+              : 'Please summarize or answer based on the attached documents.')
         const streamResult = await sendMessageStream(streamMsg, null, chatId, {
             webSearchQuery: extraWs.trim() || null,
+            codingMode: workspaceContextActive,
+            codingProjectPath: cPath || null,
             onChunk: (delta) => setLiveReply((prev) => (prev || '') + delta),
             onStatus: (d) => {
               if (d.phase === 'done') return
@@ -586,8 +672,8 @@ function App() {
     <div className="app">
       <header className="titlebar">
         <div className="titlebar-brand">
-          <img src="/JARVIS.jpg" alt="" className="titlebar-logo" />
-          <span className="titlebar-title">JARVIS</span>
+          <img src="/Ada.jpg" alt="" className="titlebar-logo" />
+          <span className="titlebar-title">Ada</span>
         </div>
       </header>
       <div className="app-body">
@@ -618,7 +704,135 @@ function App() {
               Settings
             </button>
           </div>
-          <div className="sidebar-panel" style={{ display: panel === 'chats' ? 'flex' : 'none' }}>
+          <div className="sidebar-panel sidebar-panel--chats" style={{ display: panel === 'chats' ? 'flex' : 'none' }}>
+            <div className="repo-context-card" aria-label="Project context">
+              <div className="repo-context-card__head">
+                <span className="repo-context-card__pulse" aria-hidden />
+                <h2 className="repo-context-card__title">Project context</h2>
+              </div>
+              <p className="repo-context-card__subtitle">Folder on the server for coding answers</p>
+              <div className="repo-context-card__body">
+                {!workspaceFolder.trim() && !workspaceFolderPickerOpen ? (
+                  <div className="repo-context-empty">
+                    <p className="repo-context-empty__hint">
+                      Link a folder so Ada can read its structure and files when you ask coding questions.
+                    </p>
+                    <button type="button" className="repo-context-btn repo-context-btn--primary" onClick={openWorkspaceFolderPicker}>
+                      Link folder
+                    </button>
+                  </div>
+                ) : null}
+                {!workspaceFolder.trim() && workspaceFolderPickerOpen ? (
+                  <div className="repo-context-form">
+                    <p className="repo-context-form__help">Absolute path on the machine running the API.</p>
+                    <input
+                      type="text"
+                      className="repo-context-input"
+                      placeholder="/home/you/repo or E:\path\to\repo"
+                      value={workspaceFolderDraft}
+                      onChange={(e) => setWorkspaceFolderDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          confirmWorkspaceFolder()
+                        }
+                        if (e.key === 'Escape') {
+                          setWorkspaceFolderPickerOpen(false)
+                          setWorkspaceFolderDraft('')
+                        }
+                      }}
+                      autoFocus
+                      autoComplete="off"
+                    />
+                    <div className="repo-context-form__actions">
+                      <button type="button" className="repo-context-btn repo-context-btn--primary" onClick={confirmWorkspaceFolder}>
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        className="repo-context-btn repo-context-btn--ghost"
+                        onClick={() => {
+                          setWorkspaceFolderPickerOpen(false)
+                          setWorkspaceFolderDraft('')
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                {workspaceFolder.trim() ? (
+                  <div className="repo-context-linked">
+                    <div className="repo-context-linked__row" title={workspaceFolder}>
+                      <span className="repo-context-linked__icon-wrap" aria-hidden>
+                        {REPO_FOLDER_ICON}
+                      </span>
+                      <div className="repo-context-linked__meta">
+                        <span className="repo-context-linked__name">{workspaceBasename(workspaceFolder) || workspaceFolder}</span>
+                        <span className="repo-context-linked__path">{workspaceFolder}</span>
+                      </div>
+                      <div className="repo-context-linked__actions">
+                        <button
+                          type="button"
+                          className="repo-context-icon-btn"
+                          title="Change folder"
+                          aria-label="Change linked folder"
+                          onClick={openWorkspaceFolderPicker}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="repo-context-icon-btn"
+                          title="Unlink folder"
+                          aria-label="Unlink folder"
+                          onClick={closeWorkspaceFolder}
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                    {workspaceFolderPickerOpen ? (
+                      <div className="repo-context-form repo-context-form--nested">
+                        <input
+                          type="text"
+                          className="repo-context-input"
+                          value={workspaceFolderDraft}
+                          onChange={(e) => setWorkspaceFolderDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              confirmWorkspaceFolder()
+                            }
+                            if (e.key === 'Escape') {
+                              setWorkspaceFolderPickerOpen(false)
+                              setWorkspaceFolderDraft(workspaceFolder)
+                            }
+                          }}
+                          autoFocus
+                          autoComplete="off"
+                        />
+                        <div className="repo-context-form__actions">
+                          <button type="button" className="repo-context-btn repo-context-btn--primary" onClick={confirmWorkspaceFolder}>
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            className="repo-context-btn repo-context-btn--ghost"
+                            onClick={() => {
+                              setWorkspaceFolderPickerOpen(false)
+                              setWorkspaceFolderDraft(workspaceFolder)
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </div>
             <button
               type="button"
               className="chat-new-btn"
@@ -798,6 +1012,7 @@ function App() {
             </div>
           </div>
         </aside>
+        <div className="main-column">
         <div className="chat-container">
           <div className="chat-messages">
             {messages.map((msg, i) => (
@@ -889,7 +1104,7 @@ function App() {
                   type="button"
                   id="chat-add"
                   className="chat-add-btn"
-                  aria-label="Add attachment or web search"
+                  aria-label="Attach files or enable web search"
                   aria-expanded={addMenuOpen}
                   aria-haspopup="menu"
                   onClick={() => setAddMenuOpen((o) => !o)}
@@ -929,9 +1144,11 @@ function App() {
               <textarea
                 id="chat-input"
                 placeholder={
-                  webSearchMode
-                    ? 'Message JARVIS… (each send uses the web: top results inform the reply)'
-                    : 'Message JARVIS…'
+                  workspaceFolder.trim()
+                    ? 'Message Ada… (linked project included when relevant)'
+                    : webSearchMode
+                      ? 'Message Ada… (each send uses the web: top results inform the reply)'
+                      : 'Message Ada…'
                 }
                 rows={1}
                 value={input}
@@ -944,6 +1161,27 @@ function App() {
               </button>
             </div>
           </div>
+        </div>
+        <footer className="app-context-footer" role="status">
+          <div className="app-context-footer__cluster">
+            {workspaceFolder.trim() ? (
+              <>
+                <span className="app-context-footer__badge" title={workspaceFolder}>
+                  {REPO_FOLDER_ICON}
+                  <span className="app-context-footer__badge-text">{workspaceBasename(workspaceFolder)}</span>
+                </span>
+                <span className="app-context-footer__path" title={workspaceFolder}>
+                  {workspaceFolder}
+                </span>
+              </>
+            ) : (
+              <span className="app-context-footer__idle">No project folder linked</span>
+            )}
+          </div>
+          <button type="button" className="app-context-footer__linkish" onClick={openWorkspaceFolderPicker}>
+            {workspaceFolder.trim() ? 'Change folder' : 'Link folder'}
+          </button>
+        </footer>
         </div>
       </div>
     </div>

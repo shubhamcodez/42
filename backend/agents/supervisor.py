@@ -10,7 +10,7 @@ from tools.shell_runner import is_shell_enabled
 
 MAX_AGENTS_PER_PLAN = 5
 
-_SUPERVISOR_SYSTEM = """You are the JARVIS supervisor. You decide how to handle each user message.
+_SUPERVISOR_SYSTEM = """You are the Ada supervisor. You decide how to handle each user message.
 
 You can assign **one specialist** or **several in sequence** when the task naturally splits (e.g. fetch market data then plot it; run shell prep then coding; desktop navigation then a summary — use your judgment).
 
@@ -462,15 +462,26 @@ def _parse_agents_array(out: dict[str, Any], user_message: str) -> list[dict[str
     return seen
 
 
-def supervisor_decision(api_key: str, provider: str, user_message: str) -> dict:
+def supervisor_decision(
+    api_key: str,
+    provider: str,
+    user_message: str,
+    *,
+    llm_user_content: Optional[str] = None,
+) -> dict:
     """
     Returns dict with:
       run_agent, agents (list of {agent, goal}), agent/goal (first step, backward compat),
       reasoning, next_steps.
+
+    llm_user_content: optional longer prompt for the supervisor model (e.g. project snapshot);
+    heuristics and goal fallbacks still use user_message.
     """
     user_message = (user_message or "").strip()
     if not user_message:
         return _decision_with_agents([], "", "")
+
+    llm_body = (llm_user_content or user_message).strip()
 
     hinted = _heuristic_coding_task(user_message)
     if hinted:
@@ -495,7 +506,7 @@ def supervisor_decision(api_key: str, provider: str, user_message: str) -> dict:
         model=model,
         messages=[
             {"role": "system", "content": _SUPERVISOR_SYSTEM},
-            {"role": "user", "content": user_message},
+            {"role": "user", "content": llm_body},
         ],
         **chat_completion_limit_kwargs(provider, model, 500),
     )
@@ -534,3 +545,31 @@ def supervisor_decision(api_key: str, provider: str, user_message: str) -> dict:
         return _decision_with_agents([], (reasoning + extra).strip(), next_steps)
 
     return _decision_with_agents(agents_out, reasoning, next_steps)
+
+
+def compute_supervisor_decision(
+    api_key: str,
+    provider: str,
+    user_message: str,
+    *,
+    coding_mode: bool = False,
+    coding_project_context: str = "",
+) -> dict:
+    """
+    Entry point for the router: optionally forces the coding agent (UI coding mode),
+    otherwise delegates to supervisor_decision (optionally augmenting the LLM prompt
+    when a project snapshot exists without forcing coding).
+    """
+    um = (user_message or "").strip()
+    ctx = (coding_project_context or "").strip()
+    if coding_mode and um:
+        reasoning = "Coding mode: user routed to the Python sandbox agent."
+        next_s = "1. Use repository snapshot if present 2. Generate code 3. Run in sandbox"
+        if ctx:
+            reasoning += " Project folder snapshot is attached for this turn."
+        return _decision_with_agents(
+            [{"agent": "coding", "goal": um}],
+            reasoning,
+            next_s,
+        )
+    return supervisor_decision(api_key, provider, um)

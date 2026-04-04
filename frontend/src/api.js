@@ -32,7 +32,14 @@ export async function chatbotResponse(message, attachmentPaths = null, webSearch
   return reply;
 }
 
-export async function sendMessage(message, attachmentPaths = null, chatId = null, webSearchQuery = null) {
+export async function sendMessage(
+  message,
+  attachmentPaths = null,
+  chatId = null,
+  webSearchQuery = null,
+  codingMode = false,
+  codingProjectPath = null,
+) {
   const { reply } = await request('/chat/send-message', {
     method: 'POST',
     body: JSON.stringify({
@@ -40,6 +47,8 @@ export async function sendMessage(message, attachmentPaths = null, chatId = null
       attachment_paths: attachmentPaths,
       chat_id: chatId,
       web_search_query: webSearchQuery || null,
+      coding_mode: !!codingMode,
+      coding_project_path: codingProjectPath || null,
     }),
   });
   return reply;
@@ -55,7 +64,16 @@ export async function sendMessageStream(
   message,
   attachmentPaths,
   chatId,
-  { onChunk, onDone, onToolUsed, onStatus, onAgentStep, webSearchQuery = null }
+  {
+    onChunk,
+    onDone,
+    onToolUsed,
+    onStatus,
+    onAgentStep,
+    webSearchQuery = null,
+    codingMode = false,
+    codingProjectPath = null,
+  },
 ) {
   const base = import.meta.env.VITE_API_URL || '/api'
   const res = await fetch(base + '/chat/send-message/stream', {
@@ -67,6 +85,8 @@ export async function sendMessageStream(
       attachment_paths: attachmentPaths || null,
       chat_id: chatId || null,
       web_search_query: webSearchQuery || null,
+      coding_mode: !!codingMode,
+      coding_project_path: codingProjectPath || null,
     }),
   })
   if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`)
@@ -115,11 +135,20 @@ export async function sendMessageStream(
 }
 
 /** Send message with file uploads (multipart). Use when user attached files. */
-export async function sendMessageWithFiles(message, files = [], chatId = null, webSearchQuery = null) {
+export async function sendMessageWithFiles(
+  message,
+  files = [],
+  chatId = null,
+  webSearchQuery = null,
+  codingMode = false,
+  codingProjectPath = null,
+) {
   const form = new FormData();
   form.append('message', message || '');
   form.append('chat_id', chatId ?? '');
   if (webSearchQuery) form.append('web_search_query', webSearchQuery);
+  if (codingMode) form.append('coding_mode', 'true');
+  if (codingProjectPath) form.append('coding_project_path', codingProjectPath);
   for (const f of files) {
     form.append('files', f);
   }

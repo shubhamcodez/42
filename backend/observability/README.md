@@ -4,7 +4,7 @@ Each **model** (OpenAI, xAI) is traced and evaluated independently.
 
 ## Trace logging (automatic)
 
-- Every chat/agent run is logged to `jarvis-observability/traces/trace.jsonl`.
+- Every chat/agent run is logged to `ada-observability/traces/trace.jsonl` (or `jarvis-observability` if that folder exists and `ada-observability` does not).
 - Fields: `provider`, `route` (chat | run_desktop | run_coding | run_shell | run_finance), `message`, `reply`, `success`, `error`, `duration_sec`, `token_input`, `token_output`.
 - **Streaming chat** (`/chat/send-message/stream` on the chat path) now also writes a trace row when the stream completes.
 - **Success rates, tokens, errors** can be aggregated per model via `GET /observability/traces` or `observability.optimize.aggregate_trace_stats()`.
@@ -20,13 +20,15 @@ After each **successful** turn (trace written), the backend schedules **backgrou
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `JARVIS_AUTO_OBSERVABILITY` | `1` | Master switch for the background task |
-| `JARVIS_AUTO_EVAL_GEN` | `1` | Generate eval cases from logs |
-| `JARVIS_AUTO_EVAL_COOLDOWN_SEC` | `60` | Min seconds between eval generations |
-| `JARVIS_AUTO_EVAL_NUM_TRACES` | `15` | Traces sampled for each auto generation |
-| `JARVIS_AUTO_EVAL_NUM_CASES` | `2` | Max cases appended per run |
-| `JARVIS_AUTO_OPTIMIZATION_SUGGESTIONS` | `1` | Refresh optimization JSON with LLM suggestions |
-| `JARVIS_AUTO_OPT_COOLDOWN_SEC` | `600` | Min seconds between optimization runs (10 min) |
+| `ADA_AUTO_OBSERVABILITY` | `1` | Master switch for the background task |
+| `ADA_AUTO_EVAL_GEN` | `1` | Generate eval cases from logs |
+| `ADA_AUTO_EVAL_COOLDOWN_SEC` | `60` | Min seconds between eval generations |
+| `ADA_AUTO_EVAL_NUM_TRACES` | `15` | Traces sampled for each auto generation |
+| `ADA_AUTO_EVAL_NUM_CASES` | `2` | Max cases appended per run |
+| `ADA_AUTO_OPTIMIZATION_SUGGESTIONS` | `1` | Refresh optimization JSON with LLM suggestions |
+| `ADA_AUTO_OPT_COOLDOWN_SEC` | `600` | Min seconds between optimization runs (10 min) |
+
+Legacy `JARVIS_AUTO_*` names are still read if the `ADA_*` variable is unset.
 
 Set any `*_AUTO_*` to `0` / `false` / `off` to disable that piece.
 

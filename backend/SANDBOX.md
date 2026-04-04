@@ -14,7 +14,7 @@ The coding agent runs model-generated Python in a **child process** with a **tim
 Print **one line per figure** (no line breaks inside the base64):
 
 ```text
-JARVIS_IMAGE_PNG:<base64>
+ADA_IMAGE_PNG:<base64>
 ```
 
 Example:
@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 buf = io.BytesIO()
 plt.plot([1, 2, 3])
 plt.savefig(buf, format="png")
-print("JARVIS_IMAGE_PNG:" + base64.b64encode(buf.getvalue()).decode())
+print("ADA_IMAGE_PNG:" + base64.b64encode(buf.getvalue()).decode())
 ```
 
 The coding agent turns that into a Markdown image so the frontend renders it. A **single stdout line** that is raw PNG base64 (`iVBOR…`) is also detected.

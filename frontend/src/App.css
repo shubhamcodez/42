@@ -101,6 +101,329 @@
   overflow: hidden;
 }
 
+.sidebar-panel--chats {
+  gap: 0;
+}
+
+/* Linked project folder — sidebar card (distinct from editor chrome) */
+.repo-context-card {
+  flex-shrink: 0;
+  margin: 0.55rem 0.45rem 0.4rem;
+  padding: 0.85rem 0.85rem 0.75rem;
+  border-radius: 14px;
+  max-height: 40vh;
+  overflow-y: auto;
+  background: radial-gradient(120% 80% at 0% 0%, rgba(72, 110, 98, 0.14), transparent 55%),
+    linear-gradient(165deg, #151816 0%, #0e0f10 100%);
+  border: 1px solid rgba(120, 175, 155, 0.22);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35) inset, 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.repo-context-card__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.2rem;
+}
+
+.repo-context-card__pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 10px rgba(74, 222, 128, 0.55);
+  flex-shrink: 0;
+}
+
+.repo-context-card__title {
+  font-size: 0.875rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: #dbe8e3;
+  margin: 0;
+  line-height: 1.2;
+}
+
+.repo-context-card__subtitle {
+  font-size: 0.6875rem;
+  color: #7a9088;
+  line-height: 1.35;
+  margin: 0 0 0.65rem;
+}
+
+.repo-context-card__body {
+  min-height: 0;
+}
+
+.repo-context-empty__hint {
+  font-size: 0.75rem;
+  color: #9aada5;
+  line-height: 1.5;
+  margin: 0 0 0.75rem;
+}
+
+.repo-context-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.45rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.repo-context-btn--primary {
+  width: 100%;
+  background: linear-gradient(180deg, #2f6f56 0%, #265a45 100%);
+  color: #f2faf7;
+  border-color: rgba(95, 212, 165, 0.35);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+}
+
+.repo-context-btn--primary:hover {
+  background: linear-gradient(180deg, #3a8568 0%, #2d6b52 100%);
+}
+
+.repo-context-btn--ghost {
+  background: rgba(255, 255, 255, 0.04);
+  color: #c5d3cc;
+  border-color: #333;
+}
+
+.repo-context-btn--ghost:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.repo-context-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.repo-context-form--nested {
+  margin-top: 0.65rem;
+  padding-top: 0.65rem;
+  border-top: 1px dashed rgba(120, 175, 155, 0.2);
+}
+
+.repo-context-form__help {
+  font-size: 0.6875rem;
+  color: #7a9088;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.repo-context-input {
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.8125rem;
+  font-family: ui-monospace, 'Consolas', 'Monaco', monospace;
+  border-radius: 8px;
+  border: 1px solid rgba(90, 120, 108, 0.45);
+  background: rgba(10, 12, 11, 0.65);
+  color: #d9e6df;
+}
+
+.repo-context-input:focus {
+  outline: none;
+  border-color: rgba(95, 212, 165, 0.55);
+  box-shadow: 0 0 0 1px rgba(95, 212, 165, 0.2);
+}
+
+.repo-context-input::placeholder {
+  color: #556860;
+}
+
+.repo-context-form__actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.repo-context-form__actions .repo-context-btn--primary {
+  width: auto;
+  flex: 1;
+  min-width: 4rem;
+}
+
+.repo-context-linked__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem 0.45rem;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(120, 175, 155, 0.12);
+}
+
+.repo-context-linked__icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: rgba(95, 212, 165, 0.1);
+  color: #7ecfb0;
+  flex-shrink: 0;
+}
+
+.repo-context-linked__meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.repo-context-linked__name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #e2f0ea;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-context-linked__path {
+  font-size: 0.65rem;
+  font-family: ui-monospace, 'Consolas', monospace;
+  color: #718c82;
+  line-height: 1.35;
+  word-break: break-all;
+  max-height: 3.6em;
+  overflow: hidden;
+}
+
+.repo-context-linked__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.repo-context-icon-btn {
+  padding: 0.2rem 0.45rem;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #9fbdb2;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.repo-context-icon-btn:hover {
+  background: rgba(95, 212, 165, 0.15);
+  color: #c5eadc;
+}
+
+.repo-folder-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.repo-context-linked__icon-wrap .repo-folder-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.main-column {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Footer: context strip (not a bright system status bar) */
+.app-context-footer {
+  flex-shrink: 0;
+  min-height: 36px;
+  padding: 0.35rem 1.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  background: #080808;
+  border-top: 1px solid #242424;
+  font-size: 0.75rem;
+}
+
+.app-context-footer__cluster {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.app-context-footer__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem 0.2rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(95, 212, 165, 0.1);
+  border: 1px solid rgba(95, 212, 165, 0.28);
+  color: #9bdcc4;
+  flex-shrink: 0;
+}
+
+.app-context-footer__badge .repo-folder-icon {
+  width: 14px;
+  height: 14px;
+  opacity: 0.95;
+}
+
+.app-context-footer__badge-text {
+  font-weight: 650;
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-context-footer__path {
+  font-family: ui-monospace, 'Consolas', monospace;
+  color: #5d6e66;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.app-context-footer__idle {
+  color: #5c6561;
+  font-style: italic;
+}
+
+.app-context-footer__linkish {
+  flex-shrink: 0;
+  padding: 0.35rem 0.65rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #7eb8a8;
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.app-context-footer__linkish:hover {
+  color: #a8e0cc;
+}
+
 .sidebar-list {
   flex: 1;
   overflow-y: auto;
