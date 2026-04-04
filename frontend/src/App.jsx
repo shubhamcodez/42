@@ -78,6 +78,33 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import './App.css'
 
+const CODING_LAYOUT_STORAGE_KEY = 'ada-coding-layout-widths'
+
+const EXPLORER_PANEL = { min: 200, max: 560, default: 280 }
+const CHAT_RAIL_PANEL = { min: 280, max: 720, default: 400 }
+
+function clampPanelWidth(n, lo, hi) {
+  const x = Number(n)
+  if (!Number.isFinite(x)) return lo
+  return Math.min(hi, Math.max(lo, x))
+}
+
+function readCodingLayoutWidths() {
+  try {
+    const raw = localStorage.getItem(CODING_LAYOUT_STORAGE_KEY)
+    if (raw) {
+      const o = JSON.parse(raw)
+      return {
+        explorer: clampPanelWidth(o.explorer, EXPLORER_PANEL.min, EXPLORER_PANEL.max),
+        chatRail: clampPanelWidth(o.chatRail, CHAT_RAIL_PANEL.min, CHAT_RAIL_PANEL.max),
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return { explorer: EXPLORER_PANEL.default, chatRail: CHAT_RAIL_PANEL.default }
+}
+
 /** Embedded charts from the coding agent sandbox use data:image/... URLs. */
 function markdownUrlTransform(url) {
   if (typeof url === 'string' && url.startsWith('data:image/')) return url
@@ -760,6 +787,86 @@ function App() {
   useEffect(() => {
     introduceWizardRef.current = introduceWizard
   }, [introduceWizard])
+
+  const [codingLayoutWidths, setCodingLayoutWidths] = useState(() => readCodingLayoutWidths())
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CODING_LAYOUT_STORAGE_KEY, JSON.stringify(codingLayoutWidths))
+    } catch {
+      /* ignore */
+    }
+  }, [codingLayoutWidths])
+
+  const onExplorerPanelResizePointerDown = useCallback(
+    (e) => {
+      if (e.button !== 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      const startX = e.clientX
+      const startW = codingLayoutWidths.explorer
+      const onMove = (ev) => {
+        const dx = ev.clientX - startX
+        const next = clampPanelWidth(startW + dx, EXPLORER_PANEL.min, EXPLORER_PANEL.max)
+        setCodingLayoutWidths((prev) => ({ ...prev, explorer: next }))
+      }
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        window.removeEventListener('pointercancel', onUp)
+        document.body.style.removeProperty('cursor')
+        document.body.style.removeProperty('user-select')
+      }
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+      window.addEventListener('pointercancel', onUp)
+    },
+    [codingLayoutWidths.explorer],
+  )
+
+  const onChatRailResizePointerDown = useCallback(
+    (e) => {
+      if (e.button !== 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      const startX = e.clientX
+      const startW = codingLayoutWidths.chatRail
+      const onMove = (ev) => {
+        const dx = startX - ev.clientX
+        const next = clampPanelWidth(startW + dx, CHAT_RAIL_PANEL.min, CHAT_RAIL_PANEL.max)
+        setCodingLayoutWidths((prev) => ({ ...prev, chatRail: next }))
+      }
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        window.removeEventListener('pointercancel', onUp)
+        document.body.style.removeProperty('cursor')
+        document.body.style.removeProperty('user-select')
+      }
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+      window.addEventListener('pointercancel', onUp)
+    },
+    [codingLayoutWidths.chatRail],
+  )
+
+  const nudgeExplorerPanel = useCallback((delta) => {
+    setCodingLayoutWidths((prev) => ({
+      ...prev,
+      explorer: clampPanelWidth(prev.explorer + delta, EXPLORER_PANEL.min, EXPLORER_PANEL.max),
+    }))
+  }, [])
+
+  const nudgeChatRailPanel = useCallback((delta) => {
+    setCodingLayoutWidths((prev) => ({
+      ...prev,
+      chatRail: clampPanelWidth(prev.chatRail + delta, CHAT_RAIL_PANEL.min, CHAT_RAIL_PANEL.max),
+    }))
+  }, [])
 
   useEffect(() => {
     mentionUiRef.current = fileMention
@@ -2260,7 +2367,12 @@ function App() {
         className={`app-body${codingModeEnabled && panel === 'chats' ? ' app-body--coding-chats' : ''}`}
       >
         {codingModeEnabled ? (
-        <aside className="sidebar sidebar--explorer" aria-label="Project explorer">
+        <>
+        <aside
+          className="sidebar sidebar--explorer"
+          aria-label="Project explorer"
+          style={{ width: codingLayoutWidths.explorer, flexShrink: 0 }}
+        >
           <div className="sidebar-panel sidebar-panel--explorer">
             <div className="repo-context-card" aria-label="Project context">
               <div className="repo-context-card__head">
@@ -2365,6 +2477,25 @@ function App() {
             </div>
           </div>
         </aside>
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize project explorer"
+          title="Drag to resize explorer"
+          tabIndex={0}
+          className="panel-resizer"
+          onPointerDown={onExplorerPanelResizePointerDown}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowLeft') {
+              e.preventDefault()
+              nudgeExplorerPanel(-16)
+            } else if (e.key === 'ArrowRight') {
+              e.preventDefault()
+              nudgeExplorerPanel(16)
+            }
+          }}
+        />
+        </>
         ) : null}
         {codingModeEnabled && panel === 'chats' ? (
           <div className="main-column main-column--coding-ide">
@@ -2406,7 +2537,28 @@ function App() {
                 </div>
               )}
             </div>
-            <div className="coding-chat-rail">
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize chat panel"
+              title="Drag to resize chat"
+              tabIndex={0}
+              className="panel-resizer"
+              onPointerDown={onChatRailResizePointerDown}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowLeft') {
+                  e.preventDefault()
+                  nudgeChatRailPanel(16)
+                } else if (e.key === 'ArrowRight') {
+                  e.preventDefault()
+                  nudgeChatRailPanel(-16)
+                }
+              }}
+            />
+            <div
+              className="coding-chat-rail"
+              style={{ width: codingLayoutWidths.chatRail, flexShrink: 0 }}
+            >
               <header className="chat-rail-header">
                 <div className="chat-rail-header__titles">
                   <span className="chat-rail-header__kicker">Coding mode</span>
