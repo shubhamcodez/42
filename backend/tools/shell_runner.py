@@ -1,11 +1,12 @@
 """
-Host shell execution for the shell agent (OPT-IN — dangerous).
+Host shell execution for the shell agent (enabled by default — dangerous).
 
-Set ADA_ENABLE_SHELL=1 to allow (JARVIS_ENABLE_SHELL still honored). Commands run under a
-configurable working directory (default: <repo>/ada-shell-work). On Windows, uses Git Bash if `bash` is on PATH,
+Shell is **on** unless explicitly turned off with `ADA_ENABLE_SHELL=0` / `false`, or
+`ADA_DISABLE_SHELL=1` (JARVIS_* variants still honored). Commands run under a configurable
+working directory (default: <repo>/ada-shell-work). On Windows, uses Git Bash if `bash` is on PATH,
 otherwise PowerShell. Override with ADA_SHELL=bash|powershell|sh.
 
-This is NOT a security boundary. Anyone who can reach the API can wipe data if enabled.
+This is NOT a security boundary. Anyone who can reach the API can wipe data.
 """
 from __future__ import annotations
 
@@ -26,8 +27,14 @@ def _getenv(*keys: str) -> str:
 
 
 def is_shell_enabled() -> bool:
+    """Default True. Set ADA_DISABLE_SHELL=1 or ADA_ENABLE_SHELL=0 to disable."""
+    d = _getenv("ADA_DISABLE_SHELL", "JARVIS_DISABLE_SHELL").strip().lower()
+    if d in ("1", "true", "yes", "on"):
+        return False
     v = _getenv("ADA_ENABLE_SHELL", "JARVIS_ENABLE_SHELL").strip().lower()
-    return v in ("1", "true", "yes", "on")
+    if v in ("0", "false", "no", "off", "disabled"):
+        return False
+    return True
 
 
 def _repo_root() -> Path:
@@ -135,7 +142,7 @@ def run_shell_command(command: str, timeout_sec: float | None = None) -> dict:
             "returncode": -1,
             "stdout": "",
             "stderr": "",
-            "error": "Shell tool disabled. Set ADA_ENABLE_SHELL=1 in the environment.",
+            "error": "Shell tool disabled (ADA_ENABLE_SHELL=0 or ADA_DISABLE_SHELL=1).",
             "shell": None,
         }
 

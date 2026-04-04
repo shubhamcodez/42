@@ -28,6 +28,8 @@ import {
   canUseDirectoryPicker,
   parseRelPathsFromSnapshotMarkdown,
   readProjectFileText,
+  readProjectFileAsDataUrl,
+  isProjectImagePath,
   writeProjectFileText,
 } from './projectSnapshot'
 import {
@@ -37,7 +39,12 @@ import {
   ensureDirectoryReadPermission,
   ensureDirectoryReadWritePermission,
 } from './projectHandleStorage'
-import { getPreviewFileText, clearPreviewCacheForRoot, putPreviewFileText } from './projectFileCache'
+import {
+  getPreviewFileText,
+  getPreviewImageDataUrl,
+  clearPreviewCacheForRoot,
+  putPreviewFileText,
+} from './projectFileCache'
 import { getActiveFileMention, rankProjectPathMatches } from './projectPathSuggest'
 import { ProjectFileTree } from './ProjectFileTree'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
@@ -255,18 +262,19 @@ function ChatFilePreview({ preview, onClose, onSave }) {
       setDraft('')
       return
     }
-    if (preview.loading || preview.error) {
+    if (preview.kind === 'image' || preview.loading || preview.error) {
       setDraft('')
       return
     }
     setDraft(preview.body ?? '')
-  }, [preview?.relPath, preview?.loading, preview?.error, preview?.body])
+  }, [preview?.relPath, preview?.loading, preview?.error, preview?.body, preview?.kind])
 
   if (!preview) return null
   const { title, loading, error, source } = preview
   const body = preview.body ?? ''
-  const dirty = !loading && !error && draft !== body
-  const showEditor = !loading && !error
+  const isImage = preview.kind === 'image'
+  const dirty = !loading && !error && !isImage && draft !== body
+  const showEditor = !loading && !error && !isImage
 
   const handleSave = async () => {
     if (!onSave || !preview.relPath || saving || !dirty) return
@@ -317,7 +325,7 @@ function ChatFilePreview({ preview, onClose, onSave }) {
           ×
         </button>
       </div>
-      {source === 'snapshot' ? (
+      {source === 'snapshot' && !isImage ? (
         <p className="chat-file-preview__hint">
           Showing text from your project index (may be truncated). Re-open the folder with the system folder picker for
           full file access.
@@ -325,7 +333,9 @@ function ChatFilePreview({ preview, onClose, onSave }) {
       ) : null}
       {source === 'cache' ? (
         <p className="chat-file-preview__hint">
-          No live folder handle — edits save to the browser cache only until you use &quot;Choose folder&quot; again.
+          {isImage
+            ? 'No live folder handle — image from browser cache. Use &quot;Choose folder&quot; again for the latest from disk.'
+            : 'No live folder handle — edits save to the browser cache only until you use &quot;Choose folder&quot; again.'}
         </p>
       ) : null}
       {loading ? <div className="chat-file-preview__loading">Loading…</div> : null}
@@ -346,6 +356,11 @@ function ChatFilePreview({ preview, onClose, onSave }) {
             autoComplete="off"
             aria-label="File contents"
           />
+        </div>
+      ) : null}
+      {isImage && !loading && !error && preview.imageUrl ? (
+        <div className="chat-file-preview__body chat-file-preview__body--media">
+          <img src={preview.imageUrl} alt="" className="chat-file-preview__image" />
         </div>
       ) : null}
     </div>
@@ -486,8 +501,8 @@ function ChatTerminalPanel() {
       <div className="chat-terminal__out-wrap" ref={outRef}>
         {lines.length === 0 ? (
           <div className="chat-terminal__placeholder">
-            Runs one command per line on the API host (same cwd as the shell agent). Enable{' '}
-            <code>ADA_ENABLE_SHELL=1</code> on the server.
+            Runs one command per line on the API host (same cwd as the shell agent). Shell is on by default; admins can
+            disable with <code>ADA_ENABLE_SHELL=0</code> or <code>ADA_DISABLE_SHELL=1</code>.
           </div>
         ) : (
           lines.map((row, i) => (
@@ -821,6 +836,9 @@ function App() {
 
   const saveProjectFile = useCallback(
     async (relPath, text) => {
+      if (isProjectImagePath(relPath)) {
+        return { ok: false, error: 'Image previews are read-only.' }
+      }
       let h = projectRootHandleRef.current
       if (!h) {
         try {
@@ -865,9 +883,12 @@ function App() {
       if (!codingModeEnabled || !workspaceLocalLabel?.trim() || !relPath) return
       setPanel('chats')
       const title = `${workspaceLocalLabel}/${relPath.replace(/\\/g, '/')}`
+      const isImage = isProjectImagePath(relPath)
       setFilePreview({
         relPath,
         title,
+        kind: isImage ? 'image' : 'text',
+        imageUrl: null,
         body: '',
         loading: true,
         error: null,
@@ -890,6 +911,34 @@ function App() {
             /* ignore */
           }
         }
+        if (isImage) {
+          let imageUrl = null
+          let source = null
+          if (h) {
+            imageUrl = await readProjectFileAsDataUrl(h, relPath)
+            if (imageUrl) source = 'handle'
+          }
+          if (!imageUrl) {
+            imageUrl = await getPreviewImageDataUrl(workspaceLocalLabel, relPath)
+            if (imageUrl) source = 'cache'
+          }
+          if (!imageUrl) {
+            setFilePreview({
+              relPath,
+              title,
+              kind: 'image',
+              imageUrl: null,
+              body: '',
+              loading: false,
+              error:
+                'Could not load this image. Allow folder access if prompted, or re-import the project so previews are cached.',
+              source: null,
+            })
+            return
+          }
+          setFilePreview({ relPath, title, kind: 'image', imageUrl, body: '', loading: false, error: null, source })
+          return
+        }
         let body = ''
         let source = null
         if (h) {
@@ -904,6 +953,8 @@ function App() {
           setFilePreview({
             relPath,
             title,
+            kind: 'text',
+            imageUrl: null,
             body: '',
             loading: false,
             error:
@@ -912,11 +963,13 @@ function App() {
           })
           return
         }
-        setFilePreview({ relPath, title, body, loading: false, error: null, source })
+        setFilePreview({ relPath, title, kind: 'text', imageUrl: null, body, loading: false, error: null, source })
       } catch (e) {
         setFilePreview({
           relPath,
           title,
+          kind: isProjectImagePath(relPath) ? 'image' : 'text',
+          imageUrl: null,
           body: '',
           loading: false,
           error: e?.message || 'Could not open file.',

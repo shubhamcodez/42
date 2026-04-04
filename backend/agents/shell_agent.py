@@ -68,8 +68,7 @@ def run_shell_agent(
 
     if not is_shell_enabled():
         return (
-            "Host shell is **disabled**. Set `ADA_ENABLE_SHELL=1` in the server environment to allow "
-            "terminal commands (see `backend/SHELL.md`).",
+            "Host shell is **disabled** on this server (`ADA_ENABLE_SHELL=0` or `ADA_DISABLE_SHELL=1`).",
             {"name": "shell", "input": goal[:500], "result": "disabled"},
         )
 

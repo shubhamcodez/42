@@ -319,6 +319,107 @@ export function parseRelPathsFromSnapshotMarkdown(snapshot, rootLabel) {
 }
 
 export const PREVIEW_MAX_BYTES = 400_000
+/** Cap for in-browser image preview (data URLs). */
+export const IMAGE_PREVIEW_MAX_BYTES = 6_000_000
+
+/** Paths treated as previewable images in the project explorer. */
+export function isProjectImagePath(relPath) {
+  const base = (String(relPath).split(/[/\\]/).pop() || '').toLowerCase()
+  return /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(base)
+}
+
+function guessImageMimeFromPath(relPath) {
+  const base = (String(relPath).split(/[/\\]/).pop() || '').toLowerCase()
+  const dot = base.lastIndexOf('.')
+  const ext = dot >= 0 ? base.slice(dot) : ''
+  const map = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml',
+    '.bmp': 'image/bmp',
+    '.ico': 'image/x-icon',
+  }
+  return map[ext] || 'application/octet-stream'
+}
+
+function arrayBufferToBase64(buffer) {
+  let binary = ''
+  const bytes = new Uint8Array(buffer)
+  const chunk = 8192
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)))
+  }
+  return btoa(binary)
+}
+
+async function getProjectFileNativeFile(dirHandle, relPath) {
+  if (!dirHandle || !relPath) return null
+  const parts = relPath.replace(/\\/g, '/').split('/').filter(Boolean)
+  if (!parts.length) return null
+  let cur = dirHandle
+  for (let i = 0; i < parts.length; i++) {
+    const seg = parts[i]
+    const last = i === parts.length - 1
+    const kind = last ? 'file' : 'directory'
+    const resolved = await getChildHandleCaseInsensitive(cur, seg, kind)
+    if (!resolved) return null
+    if (last) {
+      try {
+        return await resolved.handle.getFile()
+      } catch {
+        return null
+      }
+    }
+    cur = resolved.handle
+  }
+  return null
+}
+
+/**
+ * Build a data URL for <img src> from a File (used by disk read and IDB preview cache).
+ * @param {File} file
+ * @param {string} relPath relative path for extension → MIME
+ * @param {number} maxBytes
+ * @returns {Promise<string|null>}
+ */
+export async function fileToImageDataUrl(file, relPath, maxBytes = IMAGE_PREVIEW_MAX_BYTES) {
+  if (!file || !relPath || !isProjectImagePath(relPath)) return null
+  try {
+    const n = Math.min(file.size, maxBytes)
+    const slice = file.slice(0, n)
+    const buf = await slice.arrayBuffer()
+    const mime = guessImageMimeFromPath(relPath)
+    if (mime === 'image/svg+xml') {
+      const text = new TextDecoder('utf-8', { fatal: false }).decode(buf)
+      return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`
+    }
+    if (mime === 'application/octet-stream') return null
+    return `data:${mime};base64,${arrayBufferToBase64(buf)}`
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Read an image (or SVG) as a data URL for <img src>.
+ * @param {FileSystemDirectoryHandle} dirHandle
+ * @param {string} relPath
+ * @param {number} maxBytes
+ * @returns {Promise<string|null>}
+ */
+export async function readProjectFileAsDataUrl(dirHandle, relPath, maxBytes = IMAGE_PREVIEW_MAX_BYTES) {
+  if (!dirHandle || !relPath || !isProjectImagePath(relPath)) return null
+  try {
+    const file = await getProjectFileNativeFile(dirHandle, relPath)
+    if (!file) return null
+    return fileToImageDataUrl(file, relPath, maxBytes)
+  } catch {
+    return null
+  }
+}
 
 /**
  * Resolve a child name when filesystem casing may differ (e.g. Windows / picked folder).

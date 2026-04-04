@@ -227,7 +227,7 @@ class PythonSandboxRequest(BaseModel):
 
 
 class ShellRunRequest(BaseModel):
-    """Run one host shell command when ADA_ENABLE_SHELL=1 (see tools/shell_runner.py)."""
+    """Run one host shell command on the host (see tools/shell_runner.py; disable with ADA_ENABLE_SHELL=0)."""
 
     command: str
     timeout_sec: float | None = None
@@ -1235,10 +1235,13 @@ async def api_tools_python_sandbox(body: PythonSandboxRequest):
 async def api_tools_shell(body: ShellRunRequest):
     """
     Run a single shell command on the host (same backend as the shell agent).
-    Requires ADA_ENABLE_SHELL=1. Dangerous — do not expose publicly.
+    Disabled only if ADA_ENABLE_SHELL=0 or ADA_DISABLE_SHELL=1. Dangerous — do not expose publicly.
     """
     if not is_shell_enabled():
-        return {"ok": False, "error": "Shell disabled (set ADA_ENABLE_SHELL=1)."}
+        return {
+            "ok": False,
+            "error": "Shell disabled on server (remove ADA_DISABLE_SHELL or set ADA_ENABLE_SHELL=1).",
+        }
     result = await asyncio.to_thread(run_shell_command, body.command, body.timeout_sec)
     return result
 

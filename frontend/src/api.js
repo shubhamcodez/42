@@ -268,7 +268,7 @@ export async function googleDisconnect() {
 }
 
 /**
- * Run one command on the API host (see ADA_ENABLE_SHELL; Windows defaults to PowerShell).
+ * Run one command on the API host (shell on by default; Windows defaults to PowerShell).
  * @param {string} command
  * @param {number} [timeoutSec]
  * @returns {Promise<{ ok: boolean, returncode?: number, stdout?: string, stderr?: string, error?: string, shell?: string|null }>}
